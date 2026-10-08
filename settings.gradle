@@ -1,0 +1,30 @@
+pluginManagement {
+	repositories {
+		maven {
+			name = 'Fabric'
+			url = 'https://maven.fabricmc.net/'
+		}
+		mavenCentral()
+		gradlePluginPortal()
+	}
+}
+rootProject.name = 'koper_lib'
+
+include 'koperlib-core'
+project(':koperlib-core').projectDir = file('modules/koperlib-core')
+include 'koperlib-kender'
+project(':koperlib-kender').projectDir = file('modules/koperlib-kender')
+include 'koperlib-fullpack'
+project(':koperlib-fullpack').projectDir = file('modules/koperlib-fullpack')
+include 'koperlib-effects'
+project(':koperlib-effects').projectDir = file('modules/koperlib-effects')
+include 'koperlib-khysics'
+project(':koperlib-khysics').projectDir = file('modules/koperlib-khysics')
+include 'koperlib-specific'
+project(':koperlib-specific').projectDir = file('modules/koperlib-specific')
+include 'koperlib-koperstuff'
+project(':koperlib-koperstuff').projectDir = file('modules/koperlib-koperstuff')
+include 'koperlib-elpe'
+project(':koperlib-elpe').projectDir = file('modules/koperlib-elpe')
+include 'koperlib-kodel'
+project(':koperlib-kodel').projectDir = file('modules/koperlib-kodel')

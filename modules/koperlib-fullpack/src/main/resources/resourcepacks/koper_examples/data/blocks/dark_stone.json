@@ -1,0 +1,9 @@
+{
+  "id": "koper_lib:dark_stone",
+  "type": "block",
+  "hardness": 8.0,
+  "resistance": 30.0,
+  "light_level": 0,
+  "sound": "stone",
+  "creative_tab": "koper_lib:koper_blocks"
+}

@@ -1,0 +1,32 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-fullpack' }
+
+loom {
+    accessWidenerPath = file('src/main/resources/koperlib_fullpack.classtweaker')
+    // dev client handed out a fresh player uuid every launch, so anything saved per player looked
+    // wiped after a restart. pinning the name pins the uuid
+    runs {
+        client {
+            programArgs '--username', 'koper'
+        }
+    }
+}
+dependencies {
+    implementation project(':koperlib-core')
+
+    testImplementation platform('org.junit:junit-bom:5.12.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') { useJUnitPlatform() }
+
+processResources {
+    dependsOn rootProject.tasks.named('bundleFullpackNative')
+    from(rootProject.layout.buildDirectory.dir('generated/native-fullpack'))
+}

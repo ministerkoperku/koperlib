@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "rapier3d",
+    "koperlib-core",
+    "koperlib-scripting",
+    "koperlib-bedrock-js",
+    "koperlib-molang",
+    "koperlib-fullpack-native",
+    "koperlib-khysics",
+    "koperlib-kender",
+    "koperlib-elpe",
+    "kodel",
+]
+resolver = "2"
+
+[profile.release]
+opt-level      = 3
+lto            = true
+codegen-units  = 1
+panic          = "abort"
+
+[profile.dev]
+opt-level = 1
+
+# rquickjs ships no android bindings. bionic aarch64 is LP64 like glibc so the gnu ones fit
+[patch.crates-io]
+rquickjs-sys = { path = "vendor/rquickjs-sys" }

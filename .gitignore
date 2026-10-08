@@ -1,0 +1,52 @@
+# Gradle
+.gradle/
+build/
+
+# Compiled / IDE output
+/bin/
+/out/
+*.class
+
+# Rust engine build artifacts (multi-GB) — keep source, drop target
+engine/target/
+**/target/
+
+# Minecraft runtime: worlds, logs, downloaded mods (multi-GB)
+/run/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Local agent state
+.claude/
+.worktrees/
+
+# Local scratch output
+/crashpart.txt
+/build_errors*.txt
+/build_output.txt
+
+# Extracted natives cache (game dir .koperlib is runtime)
+src/main/resources/native/
+
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# stale compiler dumps
+build_errors*.txt
+build_output.txt
+
+# runtime logs, not source
+/logs/
+/engine/koperlib-khysics/koperlib_khys.log
+
+# per-module dev runs (worlds, logs)
+modules/*/run/
+modules/*/logs/

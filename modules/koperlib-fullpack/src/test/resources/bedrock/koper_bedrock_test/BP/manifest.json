@@ -1,0 +1,14 @@
+{
+  // bedrock allows comments in here, the converter has to live with that
+  "format_version": 2,
+  "header": { "name": "pack.name", "description": "pack.description", "uuid": "8f2a1c3e-5b6d-4e7f-9a0b-1c2d3e4f5a6b", "version": [1, 0, 0], "min_engine_version": [1, 21, 40] },
+  "modules": [
+    { "type": "data", "uuid": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e", "version": [1, 0, 0] },
+    { "type": "script", "language": "javascript", "uuid": "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f", "entry": "scripts/main.js", "version": [1, 0, 0] }
+  ],
+  "dependencies": [
+    { "uuid": "1a2b3c4d-5e6f-4a0b-8c1d-2e3f4a5b6c7d", "version": [1, 0, 0] },
+    { "module_name": "@minecraft/server", "version": "2.0.0" },
+    { "module_name": "@minecraft/server-ui", "version": "2.0.0" }
+  ]
+}

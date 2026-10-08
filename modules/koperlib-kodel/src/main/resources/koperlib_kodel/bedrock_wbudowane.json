@@ -1,0 +1,155 @@
+{
+ "_koper": "koperlib's own stand ins for the few bedrock built ins addons name without shipping. written from what they do, not copied. a pack or koperlib/bedrock_vanilla defining the same id wins",
+ "animations": {
+  "animation.common.look_at_target": {
+   "loop": true,
+   "bones": {
+    "head": {
+     "relative_to": {
+      "rotation": "entity"
+     },
+     "rotation": [
+      "q.target_x_rotation - this",
+      "q.target_y_rotation - this",
+      0.0
+     ]
+    }
+   }
+  },
+  "animation.humanoid.look_at_target.default": {
+   "loop": true,
+   "bones": {
+    "head": {
+     "relative_to": {
+      "rotation": "entity"
+     },
+     "rotation": [
+      "q.target_x_rotation - this",
+      "q.target_y_rotation - this",
+      0.0
+     ]
+    }
+   }
+  },
+  "animation.humanoid.look_at_target.gliding": {
+   "loop": true,
+   "bones": {
+    "head": {
+     "relative_to": {
+      "rotation": "entity"
+     },
+     "rotation": [
+      "q.target_x_rotation - this",
+      "q.target_y_rotation - this",
+      0.0
+     ]
+    }
+   }
+  },
+  "animation.humanoid.look_at_target.swimming": {
+   "loop": true,
+   "bones": {
+    "head": {
+     "relative_to": {
+      "rotation": "entity"
+     },
+     "rotation": [
+      "q.target_x_rotation - this",
+      "q.target_y_rotation - this",
+      0.0
+     ]
+    }
+   }
+  },
+  "animation.player.move.arms": {
+   "loop": true,
+   "bones": {
+    "leftArm": {
+     "rotation": [
+      "math.cos(q.modified_distance_moved * 38.17) * q.modified_move_speed * 57.3",
+      0.0,
+      0.0
+     ]
+    },
+    "rightArm": {
+     "rotation": [
+      "-(math.cos(q.modified_distance_moved * 38.17) * q.modified_move_speed * 57.3)",
+      0.0,
+      0.0
+     ]
+    }
+   }
+  },
+  "animation.player.move.legs": {
+   "loop": true,
+   "bones": {
+    "leftLeg": {
+     "rotation": [
+      "-1.4 * math.cos(q.modified_distance_moved * 38.17) * q.modified_move_speed * 57.3",
+      0.0,
+      0.0
+     ]
+    },
+    "rightLeg": {
+     "rotation": [
+      "1.4 * math.cos(q.modified_distance_moved * 38.17) * q.modified_move_speed * 57.3",
+      0.0,
+      0.0
+     ]
+    }
+   }
+  },
+  "animation.player.look_at_target.ui": {
+   "loop": true,
+   "bones": {
+    "head": {
+     "relative_to": {
+      "rotation": "entity"
+     },
+     "rotation": [
+      "q.target_x_rotation - this",
+      "q.target_y_rotation - this",
+      0.0
+     ]
+    }
+   }
+  }
+ },
+ "render_controllers": {
+  "controller.render.default": {
+   "geometry": "Geometry.default",
+   "materials": [
+    {
+     "*": "Material.default"
+    }
+   ],
+   "textures": [
+    "Texture.default"
+   ]
+  },
+  "controller.render.item_default": {
+   "geometry": "Geometry.default",
+   "materials": [
+    {
+     "*": "v.is_enchanted ? Material.enchanted : Material.default"
+    }
+   ],
+   "textures": [
+    "Texture.default",
+    "Texture.enchanted"
+   ]
+  },
+  "controller.render.armor": {
+   "geometry": "Geometry.default",
+   "materials": [
+    {
+     "*": "v.is_enchanted ? Material.enchanted : Material.default"
+    }
+   ],
+   "textures": [
+    "Texture.default",
+    "Texture.enchanted"
+   ]
+  }
+ }
+}

@@ -1,0 +1,14 @@
+[package]
+name = "koperlib-fullpack-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "koperlib_fullpack_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+koperlib-scripting = { path = "../koperlib-scripting" }
+koperlib-bedrock-js = { path = "../koperlib-bedrock-js" }
+koperlib-molang = { path = "../koperlib-molang" }
+serde_json = "1"

@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:ice_platform",
+  "type": "block",
+  "hardness": 2.0,
+  "resistance": 3.0,
+  "light_level": 0,
+  "sound": "glass",
+  "slipperiness": 0.98,
+  "transparent": true,
+  "creative_tab": "koper_lib:koper_blocks"
+}

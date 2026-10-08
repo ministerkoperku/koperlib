@@ -1,0 +1,12 @@
+{
+  "id": "koper_lib:koper_boots",
+  "type": "armor",
+  "armor_type": "boots",
+  "defense": 4,
+  "toughness": 2.0,
+  "knockback_resistance": 0.2,
+  "durability": 350,
+  "rarity": "UNCOMMON",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_armor"
+}

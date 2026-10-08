@@ -1,0 +1,31 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-kodel' }
+
+dependencies {
+    implementation project(':koperlib-core')
+    implementation project(':koperlib-kender')
+    compileOnly project(':koperlib-fullpack')
+    testImplementation project(':koperlib-core')
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Native smoke tests call the real Rust parser via Panama; the .so lives in
+// the engine release dir, exactly like the runClient machinery in module-common.
+test {
+    useJUnitPlatform()
+    // point Panama at the built engine so the native-vs-Java cross-checks run
+    jvmArgs "-Djava.library.path=${rootProject.koperRustTarget.absolutePath}", '--enable-native-access=ALL-UNNAMED'
+}
+
+// The Kodel native ships here, not in Core. KodelNative is the resource anchor,
+// so the library has to live in the same jar as that class.
+processResources {
+    dependsOn rootProject.tasks.named('bundleKodelNative')
+    from(rootProject.layout.buildDirectory.dir('generated/native-kodel'))
+}

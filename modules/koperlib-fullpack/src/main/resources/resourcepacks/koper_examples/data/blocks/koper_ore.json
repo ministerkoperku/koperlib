@@ -1,0 +1,10 @@
+{
+  "id": "koper_lib:koper_ore",
+  "type": "block",
+  "hardness": 4.0,
+  "resistance": 6.0,
+  "light_level": 3,
+  "sound": "stone",
+  "drops_self": true,
+  "creative_tab": "koper_lib:koper_blocks"
+}

@@ -1,0 +1,18 @@
+[package]
+name    = "koperlib-khysics"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "koperlib_khysics_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# our rapier fork — MC-tuned defaults, stripped serde/debug bloat
+rapier3d = { path = "../rapier3d", default-features = false, features = ["dim3", "f32", "std", "simd-stable", "parallel"] }
+nalgebra = { version = "0.34", default-features = false, features = ["alloc"] }
+glam     = { version = "0.30", features = ["fast-math"] }
+
+[dev-dependencies]
+# only the scene replay test reads json
+serde_json = "1"

@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:shadow_blade",
+  "type": "sword",
+  "damage": 20,
+  "durability": 5000,
+  "attack_speed": -2.8,
+  "fireproof": true,
+  "rarity": "RARE",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_weapons"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:bounce_pad",
+  "type": "block",
+  "hardness": 1.0,
+  "resistance": 2.0,
+  "light_level": 5,
+  "sound": "wool",
+  "slipperiness": 0.3,
+  "logic": "scripts/bounce_pad.lua",
+  "creative_tab": "koper_lib:koper_blocks"
+}

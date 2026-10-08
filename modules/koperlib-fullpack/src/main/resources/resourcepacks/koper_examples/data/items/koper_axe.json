@@ -1,0 +1,10 @@
+{
+  "id": "koper_lib:koper_axe",
+  "type": "tool",
+  "damage": 10,
+  "durability": 2000,
+  "mining_speed": 10.0,
+  "rarity": "COMMON",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_tools"
+}

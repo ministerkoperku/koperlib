@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "package": "com.koper.koper_lib.mixin",
+  "plugin": "com.koper.koper_lib.coremod.KoperMixinKrzykacz",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["EntityAccessor"],
+  "injectors": { "defaultRequire": 1 }
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "koperlib_core",
+  "version": "${version}",
+  "name": "KoperLib Core",
+  "description": "Shared module, networking, commands, config and render foundations for the KoperLib ecosystem.",
+  "authors": ["Koper"],
+  "license": "LGPL-3.0-only",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.koper.koper_lib.coremod.KoperCore"]
+  },
+  "mixins": ["koperlib_core.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": ">=26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

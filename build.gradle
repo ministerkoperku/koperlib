@@ -1,0 +1,288 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // Jar-in-Jar: the aggregator physically carries every public module, so
+    // "install KoperLib" is one file instead of seven. Fabric unpacks the nested
+    // jars and keeps only the newest copy when several mods ship the same module.
+    include project(':koperlib-core')
+    include project(':koperlib-kender')
+    include project(':koperlib-fullpack')
+    include project(':koperlib-effects')
+    include project(':koperlib-khysics')
+    include project(':koperlib-specific')
+    include project(':koperlib-elpe')
+    include project(':koperlib-kodel')
+    // `include` only packs the jars; runClient here needs the modules on the
+    // dev classpath too, or the aggregator starts with its dependencies missing.
+    // koperstuff is dev only: it carries the /koperlib command tree.
+    // -PdevModules=core,khysics (module names without the koperlib- prefix) starts the dev
+    // game with only those modules, to check that a release jar runs without the others.
+    def devModules = project.findProperty('devModules')
+    def allDevModules = [':koperlib-core', ':koperlib-kender', ':koperlib-fullpack', ':koperlib-effects',
+     ':koperlib-khysics', ':koperlib-specific', ':koperlib-elpe',
+     ':koperlib-kodel', ':koperlib-koperstuff']
+    (devModules ? devModules.split(',').collect { ":koperlib-${it.trim()}" } : allDevModules)
+        .each { localRuntime project(it) }
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.named('test') { failOnNoDiscoveredTests = false }
+
+// Native libraries are compiled once for the whole workspace. Their owning
+// subprojects copy only their own library into their resources.
+def rustTarget = file('engine/target/release')
+def os = org.gradle.internal.os.OperatingSystem.current()
+ext.koperNativePlatform = os.isWindows() ? 'windows-x86_64'
+    : os.isMacOsX() ? 'macos-aarch64'
+    : 'linux-x86_64'
+ext.koperRustTarget = rustTarget
+ext.koperPrebuiltNatives = providers.gradleProperty('koperlib.prebuiltNatives').getOrNull()
+
+// platform key -> rust triple. the key doubles as the folder name inside the jar,
+// KoperNativeLoader.platformKey() rebuilds the exact same string at runtime
+def koperTriples = [
+    'linux-x86_64'   : 'x86_64-unknown-linux-gnu',
+    'windows-x86_64' : 'x86_64-pc-windows-gnu',
+    'macos-aarch64'  : 'aarch64-apple-darwin',
+    'macos-x86_64'   : 'x86_64-apple-darwin',
+    'android-aarch64': 'aarch64-linux-android'
+]
+def libNameFor = { String platform, String stem ->
+    platform.startsWith('windows') ? "${stem}.dll"
+        : platform.startsWith('macos') ? "lib${stem}.dylib"
+        : "lib${stem}.so"
+}
+def crossDirFor = { String platform -> file("engine/target/${koperTriples[platform]}/release") }
+
+// don't fire cargo just to read its whining — ask rustup if the target is even there
+def rustupHas = { String triple ->
+    try {
+        def probe = ['rustup', 'target', 'list', '--installed'].execute()
+        probe.waitFor()
+        return probe.in.text.readLines()*.trim().contains(triple)
+    } catch (Exception ignored) {
+        return false
+    }
+}
+def termuxClang = '/data/data/com.termux/files/usr/bin/clang'
+
+tasks.register('buildRust', Exec) {
+    workingDir 'engine'
+    commandLine 'cargo', 'build', '--release'
+    description = 'Compiles all KoperLib Rust feature libraries for whatever box you are on'
+}
+
+tasks.register('buildRustDev', Exec) {
+    workingDir 'engine'
+    commandLine 'cargo', 'build'
+}
+
+// one task per shipped platform. these are opt-in on purpose — a normal dev build
+// must never try to cross-compile for a phone that isn't plugged into anything
+def koperCrossJobs = [
+    buildLinux   : 'linux-x86_64',
+    buildWindows : 'windows-x86_64',
+    buildMac     : 'macos-aarch64',
+    buildMacIntel: 'macos-x86_64',
+    buildAndroid : 'android-aarch64'
+]
+
+koperCrossJobs.each { jobName, platform ->
+    def triple = koperTriples[platform]
+    tasks.register(jobName, Exec) {
+        group = 'koperlib native'
+        description = "Cross-compiles the KoperLib Rust libs for ${platform} (${triple})"
+        workingDir 'engine'
+        commandLine 'cargo', 'build', '--release', '--target', triple
+        if (platform == 'android-aarch64') {
+            // bionic build for phones (zalith). termux clang does the linking, cc-crate
+            // deps (mlua vendored lua etc.) need the android clang too or they quietly
+            // build glibc objects and you find out at runtime. fuck that
+            def tb = '/data/data/com.termux/files/usr/bin'
+            environment 'CC_aarch64_linux_android', "${tb}/clang"
+            environment 'CXX_aarch64_linux_android', "${tb}/clang++"
+            environment 'AR_aarch64_linux_android', "${tb}/llvm-ar"
+            environment 'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER', "${tb}/clang"
+        }
+        onlyIf {
+            if (!rustupHas(triple)) {
+                logger.warn('[KoperLib/native] skipping {} — no rust target, fix with `rustup target add {}`', platform, triple)
+                return false
+            }
+            if (platform == 'android-aarch64' && !file(termuxClang).exists()) {
+                logger.warn('[KoperLib/native] skipping android — no termux clang, this one only cross-builds from the phone')
+                return false
+            }
+            return true
+        }
+    }
+}
+
+// the one for public/release jars. dev builds stay on plain buildRust, cross
+// toolchains take forever and you don't need a mac .dylib to test a block
+tasks.register('buildAll') {
+    group = 'koperlib native'
+    description = 'Builds the Rust natives for every shipped platform (public release build)'
+    dependsOn koperCrossJobs.keySet()
+}
+
+def shippedPlatforms = ['linux-x86_64', 'windows-x86_64', 'macos-aarch64', 'macos-x86_64', 'android-aarch64']
+def nativeModules = [
+    kender: 'koperlib_engine',
+    fullpack: 'koperlib_fullpack_engine',
+    khysics: 'koperlib_khysics_engine',
+    elpe: 'koperlib_elpe_engine',
+    kodel: 'koperlib_kodel_engine'
+]
+
+nativeModules.each { moduleName, stem ->
+    def mappedName = libNameFor(koperNativePlatform, stem)
+    tasks.register("bundle${moduleName.capitalize()}Native", Copy) {
+        // only the host build is wired in. the cross targets are opt-in through
+        // buildAll / buildWindows / buildAndroid, so a plain `gradlew build` on a
+        // desktop never drags a phone toolchain into it
+        if (koperPrebuiltNatives == null) dependsOn tasks.named('buildRust')
+        into layout.buildDirectory.dir("generated/native-${moduleName}/native")
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+        // desktop native
+        if (koperPrebuiltNatives != null) {
+            from(file(koperPrebuiltNatives)) { include "**/${mappedName}"; into koperNativePlatform }
+        } else {
+            // the host build has no triple folder, it just dumps into target/release
+            from(rustTarget) { include mappedName; into koperNativePlatform }
+        }
+        // whatever the cross jobs left behind. dirs that were never built simply
+        // hand over nothing, android-aarch64 included — bionic keeps its own key
+        koperTriples.each { platform, triple ->
+            // NEVER let a cross dir shadow the host build. duplicatesStrategy is INCLUDE so the last
+            // copy wins, and target/<host-triple>/release is only refreshed by `gradlew buildLinux`
+            // — so a plain `cargo build --release` silently did nothing and the jar shipped whatever
+            // that folder happened to hold. mine was a day old. host wins on the host, always.
+            if (koperPrebuiltNatives == null && platform == koperNativePlatform) return
+            from(crossDirFor(platform)) { include libNameFor(platform, stem); into platform }
+        }
+        doLast {
+            def root = layout.buildDirectory.dir("generated/native-${moduleName}/native").get().asFile
+            def have = shippedPlatforms.findAll { platform ->
+                new File(root, platform).listFiles()?.any { candidate -> candidate.isFile() }
+            }
+            def missing = shippedPlatforms - have
+            if (have.isEmpty()) {
+                logger.warn('[KoperLib/{}] no native library was bundled', moduleName)
+            } else if (!missing.isEmpty()) {
+                logger.warn('[KoperLib/{}] native covers {} but not {} — public builds want `gradlew buildAll` first',
+                    moduleName, have.join(', '), missing.join(', '))
+            }
+        }
+    }
+}
+
+def nativeJvmArgs = [
+    "-Djava.library.path=${rustTarget.absolutePath}",
+    '--enable-native-access=ALL-UNNAMED'
+]
+tasks.named('runClient') { jvmArgs nativeJvmArgs }
+tasks.named('runServer') { jvmArgs nativeJvmArgs }
+
+// A bare `gradlew runClient` would start one game per module, each in its own
+// modules/<x>/run folder. Module run tasks only go when named by full path.
+subprojects {
+    tasks.matching { it.name in ['runClient', 'runServer'] }.configureEach { t ->
+        t.onlyIf { gradle.startParameter.taskNames.any { it == t.path } }
+    }
+}
+
+// The root project is intentionally only the empty `koper_lib` convenience
+// mod. Building it also builds every independently compiled public module.
+tasks.named('build') {
+    dependsOn ':koperlib-core:build'
+    dependsOn ':koperlib-kender:build'
+    dependsOn ':koperlib-fullpack:build'
+    dependsOn ':koperlib-effects:build'
+    dependsOn ':koperlib-khysics:build'
+    dependsOn ':koperlib-specific:build'
+    dependsOn ':koperlib-koperstuff:build'
+    dependsOn ':koperlib-elpe:build'
+    dependsOn ':koperlib-kodel:build'
+}
+
+// Release jars: three Modrinth projects, each one file. Every module stays its own Fabric mod
+// nested inside (META-INF/jars + "jars"), so ids such as koperlib_core keep resolving for
+// consumers. Fullpack APIs and Khysics depend on Core only and must start without each other.
+def releaseSets = [
+    [id: 'koperlib', name: 'KoperLib Core', file: 'koperlib-core',
+     description: 'KoperLib foundation: networking, commands, config, the Kender render backend and the attachment, multiblock, workstation and combat APIs.',
+     modules: ['koperlib-core', 'koperlib-specific', 'koperlib-kender'], needsCore: false],
+    [id: 'koperlib_fullpack_apis', name: 'KoperLib Fullpack APIs', file: 'koperlib-fullpack-apis',
+     description: 'Fullpacks (JSON/Lua content, KUI, Koper Actions), Kodel models and animations, and KFX effects. Requires KoperLib Core.',
+     modules: ['koperlib-fullpack', 'koperlib-kodel', 'koperlib-effects'], needsCore: true],
+    [id: 'koperlib_physics', name: 'KoperLib Khysics', file: 'koperlib-khysics',
+     description: 'Khysics physics: kontraptions, local block grids and the Elpe light physics engine. Requires KoperLib Core.',
+     modules: ['koperlib-khysics', 'koperlib-elpe'], needsCore: true],
+]
+
+def releaseJars = releaseSets.collect { set ->
+    def task = "releaseJar${set.file.split('-').collect { it.capitalize() }.join('')}"
+    def metaDir = layout.buildDirectory.dir("release-meta/${set.file}")
+    tasks.register(task, Jar) {
+        group = 'release'
+        description = "Builds the ${set.name} release jar"
+        archiveFileName = "${set.file}-${project.version}.jar"
+        destinationDirectory = layout.buildDirectory.dir('release')
+        def moduleJars = set.modules.collect { project(":${it}").tasks.named('jar') }
+        dependsOn moduleJars
+        moduleJars.each { jarTask -> from(jarTask) { into 'META-INF/jars' } }
+        from(metaDir)
+        from(files('COPYING', 'COPYING.LESSER', 'THIRD_PARTY.md'))
+        if (set.file == 'koperlib-khysics') from('engine/rapier3d/LICENSE') { rename { 'LICENSE-rapier.txt' } }
+        inputs.property 'version', project.version
+        doFirst {
+            def nested = moduleJars.collect { [file: "META-INF/jars/${it.get().archiveFileName.get()}"] }
+            def depends = [fabricloader: ">=${project.loader_version}", minecraft: ">=${project.minecraft_version}",
+                           java: '>=25', 'fabric-api': '*']
+            if (set.needsCore) depends.koperlib = ">=${project.version}"
+            def meta = [schemaVersion: 1, id: set.id, version: project.version, name: set.name,
+                        description: set.description, authors: ['Koper'], license: 'LGPL-3.0-only',
+                        environment: '*', jars: nested, depends: depends]
+            def out = metaDir.get().file('fabric.mod.json').asFile
+            out.parentFile.mkdirs()
+            out.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(meta))
+        }
+    }
+}
+
+tasks.register('releaseJars') {
+    group = 'release'
+    description = 'Builds the three KoperLib release jars into build/release'
+    dependsOn releaseJars
+}

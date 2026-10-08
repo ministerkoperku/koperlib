@@ -1,0 +1,8 @@
+{
+  "type": "item",
+  "id": "koper_lib:java_tester",
+  "name": "Java Tester",
+  "preset": "amethyst_shard",
+  "logic": "data/koper_content/scripts/test.java",
+  "creativeTab": "koper_lib:main"
+}

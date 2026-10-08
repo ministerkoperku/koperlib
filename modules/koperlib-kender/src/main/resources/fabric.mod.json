@@ -1,0 +1,32 @@
+{
+	"schemaVersion": 1,
+	"id": "koperlib_kender",
+	"version": "${version}",
+	"name": "KoperLib Kender",
+	"description": "Kender geometry and render backend. Owns the native geometry engine and the Vulkan path; Kodel, KFX and Khysics all render through it.",
+	"authors": [
+		"koper"
+	],
+	"license": "LGPL-3.0-only",
+	"environment": "*",
+	"icon": "assets/koperlib_kender/icon.png",
+	"entrypoints": {
+		"main": [
+			"com.koper.koper_lib.kender.KoperKenderMod"
+		],
+		"client": [
+			"com.koper.koper_lib.kender.KoperKenderClient"
+		]
+	},
+	"depends": {
+		"koperlib_core": "*",
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"mixins": [
+		"koperlib_kender.mixins.json"
+	],
+	"accessWidener": "koperlib_kender.classtweaker"
+}

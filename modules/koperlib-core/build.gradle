@@ -1,0 +1,10 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-core' }
+
+// Core ships no native library. The Kender engine moved to :koperlib-kender,
+// which owns both the bridge and the bundled binary.

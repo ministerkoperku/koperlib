@@ -1,0 +1,8 @@
+{
+  "type": "item",
+  "id": "koper_lib:lua_tester",
+  "name": "Lua Tester",
+  "preset": "emerald",
+  "logic": "data/koper_content/scripts/test.lua",
+  "creativeTab": "koper_lib:main"
+}

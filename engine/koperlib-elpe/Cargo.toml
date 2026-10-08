@@ -1,0 +1,15 @@
+[package]
+name    = "koperlib-elpe"
+version = "0.1.0"
+edition = "2021"
+description = "elpe — extremely light physics engine. points, no rotation, joints, millions of them"
+
+[lib]
+name = "koperlib_elpe_engine"
+crate-type = ["cdylib", "rlib"]
+
+# zero deps on purpose. elpe has to drop into any koperlib tree without dragging rapier along
+[dependencies]
+
+[[example]]
+name = "elpe_bench"

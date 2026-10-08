@@ -1,0 +1,8 @@
+{
+  "id": "koper_lib:dark_ingot",
+  "type": "item",
+  "rarity": "UNCOMMON",
+  "fireproof": true,
+  "max_stack": 64,
+  "creative_tab": "koper_lib:koper_materials"
+}

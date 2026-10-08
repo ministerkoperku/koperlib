@@ -1,0 +1,25 @@
+{
+  "format_version": "1.21.40",
+  "minecraft:recipe_shaped": {
+    "description": {
+      "identifier": "kbt:zap_wand"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "pattern": [
+      " G",
+      " S",
+      "S "
+    ],
+    "key": {
+      "G": {
+        "item": "minecraft:glowstone_dust"
+      },
+      "S": "minecraft:stick"
+    },
+    "result": {
+      "item": "kbt:zap_wand"
+    }
+  }
+}

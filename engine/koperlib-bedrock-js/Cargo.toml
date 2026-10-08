@@ -1,0 +1,11 @@
+[package]
+name    = "koperlib-bedrock-js"
+version = "0.1.0"
+edition = "2021"
+
+# quickjs for bedrock addon scripts. vendored C like mlua, so the android cross build is the same dance
+[dependencies]
+rquickjs = { version = "0.14", features = ["loader", "futures"] }
+
+[dev-dependencies]
+serde_json = "1"

@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:koper_leggings",
+  "type": "armor",
+  "armor_type": "leggings",
+  "defense": 7,
+  "toughness": 2.5,
+  "durability": 500,
+  "rarity": "RARE",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_armor"
+}

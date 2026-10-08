@@ -1,0 +1,23 @@
+[package]
+name    = "koperlib-kender"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+glam = "0.29"
+# data-parallel particle eval across CPU cores — render thread fans out instead of one core choking
+rayon = "1"
+
+# ash: "loaded" = lazy dlopen(vulkan-1.dll), no import-time DLL load — GLFW stays safe
+ash  = { version = "0.38", default-features = false, features = ["loaded"], optional = true }
+# naga: pure-Rust WGSL/GLSL → SPIR-V, no C libs, no Vulkan SDK at build time.
+# wgsl-in is the good frontend (glsl-in can't do samplers) — our shaders are WGSL now.
+naga = { version = "22",   features = ["wgsl-in", "glsl-in", "spv-out"],     optional = true }
+
+[features]
+default = ["vk"]
+# direct-Vulkan render path (shares MC's device). ash is lazy-loaded so this is safe to default-on
+vk = ["ash", "naga"]

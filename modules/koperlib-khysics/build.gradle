@@ -1,0 +1,57 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-khysics' }
+loom { accessWidenerPath = file('src/main/resources/koperlib_khysics.classtweaker') }
+
+repositories {
+    maven {
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
+}
+
+dependencies {
+    implementation project(':koperlib-core')
+    implementation project(':koperlib-kender')
+    compileOnly project(':koperlib-fullpack')
+    compileOnly project(':koperlib-kodel')
+    implementation(annotationProcessor('io.github.llamalad7:mixinextras-fabric:0.5.4'))
+    // compile only. there is no create fly for 26.3 yet, but the compat sources still need
+    // its classes to compile, so the 26.2 build comes from modrinth's maven and is never
+    // loaded at runtime (it is not in run/mods, which fabric force loads)
+    compileOnly 'maven.modrinth:create-fly:26.2-rc-2-6.0.9-1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// the elpe backend test drives the real elpe .so through panama, same trick kodel uses
+test {
+    useJUnitPlatform()
+    jvmArgs "-Djava.library.path=${rootProject.koperRustTarget.absolutePath}", '--enable-native-access=ALL-UNNAMED'
+}
+
+processResources {
+    dependsOn rootProject.tasks.named('bundleKhysicsNative')
+    from(rootProject.layout.buildDirectory.dir('generated/native-khysics'))
+    // ElpeKoperer lives in THIS jar, so the elpe native has to be in here too or it can never
+    // find it. the elpe module ships its own copy for its own commands; fabric keeps one
+    dependsOn rootProject.tasks.named('bundleElpeNative')
+    from(rootProject.layout.buildDirectory.dir('generated/native-elpe'))
+}
+
+tasks.register('probeKontraStateProjection', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.koper.koper_lib.physics.KontraStateProjectionProbe'
+}
+
+tasks.register('probeKontraGridPerf', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.koper.koper_lib.physics.KontraGridPerfProbe'
+    maxHeapSize = '2g'
+}

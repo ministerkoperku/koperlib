@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:flame_sword",
+  "type": "sword",
+  "damage": 12,
+  "durability": 2500,
+  "attack_speed": -2.0,
+  "fireproof": true,
+  "rarity": "EPIC",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_weapons"
+}

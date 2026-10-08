@@ -1,0 +1,33 @@
+{
+  "required": true,
+  "package": "com.koper.koper_lib.kodel.mixin",
+  "plugin": "com.koper.koper_lib.coremod.KoperMixinKrzykacz",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "KodelObbPickMixin"
+  ],
+  "client": [
+    "KodelModelPartAccessor",
+    "BrStanMixin",
+    "BrWyciagMixin",
+    "BrDrawDistanceMixin",
+    "BrRysujMixin",
+    "BrNazwaInvoker",
+    "BrHumanoidMixin",
+    "BrReceMixin",
+    "BrZbrojaMixin",
+    "BrSwiatMixin",
+    "BrPierwszaOsobaMixin",
+    "BrRekaMixin",
+    "BrEkwipunekMixin",
+    "KodelBlockUpdateMixin",
+    "KodelLayersMixin",
+    "KodelArmorVanillaSkipMixin",
+    "KodelPlayerHideMixin",
+    "KodelItemRendererMixin",
+    "KodelBoneHitMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

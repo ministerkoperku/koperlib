@@ -1,0 +1,29 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Koper Bedrock Test RP",
+    "description": "",
+    "uuid": "1a2b3c4d-5e6f-4a0b-8c1d-2e3f4a5b6c7d",
+    "version": [
+      1,
+      0,
+      0
+    ],
+    "min_engine_version": [
+      1,
+      21,
+      40
+    ]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
+      "version": [
+        1,
+        0,
+        0
+      ]
+    }
+  ]
+}

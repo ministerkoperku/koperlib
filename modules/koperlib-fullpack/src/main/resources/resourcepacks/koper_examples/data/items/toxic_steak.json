@@ -1,0 +1,9 @@
+{
+  "id": "koper_lib:toxic_steak",
+  "type": "food",
+  "food_hunger": 8,
+  "food_saturation": 0.8,
+  "rarity": "UNCOMMON",
+  "max_stack": 64,
+  "creative_tab": "koper_lib:koper_food"
+}

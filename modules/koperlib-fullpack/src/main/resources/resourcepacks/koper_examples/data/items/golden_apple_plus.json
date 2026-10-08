@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:golden_apple_plus",
+  "type": "food",
+  "food_hunger": 10,
+  "food_saturation": 1.5,
+  "rarity": "EPIC",
+  "fireproof": true,
+  "max_stack": 16,
+  "effects": ["regen", "absorption"],
+  "creative_tab": "koper_lib:koper_food"
+}

@@ -1,0 +1,64 @@
+{
+  "format_version": "1.21.40",
+  "minecraft:block": {
+    "description": {
+      "identifier": "kbt:lamp",
+      "states": {
+        "kbt:lit": [
+          false,
+          true
+        ],
+        "kbt:color": [
+          "red",
+          "blue"
+        ]
+      },
+      "traits": {
+        "minecraft:placement_direction": {
+          "enabled_states": [
+            "minecraft:cardinal_direction"
+          ]
+        }
+      }
+    },
+    "components": {
+      "minecraft:material_instances": {
+        "*": {
+          "texture": "lamp_off"
+        }
+      },
+      "kbt:switch": {}
+    },
+    "permutations": [
+      {
+        "condition": "q.block_state('kbt:lit') == true && q.block_state('kbt:color') == 'red'",
+        "components": {
+          "minecraft:light_emission": 15,
+          "minecraft:material_instances": {
+            "*": {
+              "texture": "lamp_on"
+            }
+          }
+        }
+      },
+      {
+        "condition": "query.block_state('kbt:lit') && query.block_state('kbt:color') == 'blue'",
+        "components": {
+          "minecraft:light_emission": 9
+        }
+      },
+      {
+        "condition": "q.block_state('minecraft:cardinal_direction') == 'east'",
+        "components": {
+          "minecraft:transformation": {
+            "rotation": [
+              0,
+              -90,
+              0
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

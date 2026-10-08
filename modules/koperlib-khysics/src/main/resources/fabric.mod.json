@@ -1,0 +1,39 @@
+{
+	"schemaVersion": 1,
+	"id": "koperlib_khysics",
+	"version": "${version}",
+	"name": "KoperLib Khysics",
+	"description": "Khysics, kontraktions, local grids and the Kender physics adapter; Create compatibility is built in conditionally.",
+	"authors": [
+		"Koper"
+	],
+	"license": "LGPL-3.0-only",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.koper.koper_lib.physics.KoperKhysicsMod"
+		],
+		"client": [
+			"com.koper.koper_lib.physics.KoperKhysicsClient"
+		],
+		"koperlib-fullpack-addon": [
+			"com.koper.koper_lib.physics.KhysicsFullpackAddon"
+		]
+	},
+	"mixins": [
+		"koperlib_khysics.mixins.json"
+	],
+	"accessWidener": "koperlib_khysics.classtweaker",
+	"depends": {
+		"koperlib_core": "*",
+		"koperlib_kender": "*",
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"koperlib_kodel": "*",
+		"create": "*"
+	}
+}

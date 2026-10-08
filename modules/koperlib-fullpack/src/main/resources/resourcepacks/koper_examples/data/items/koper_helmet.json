@@ -1,0 +1,11 @@
+{
+  "id": "koper_lib:koper_helmet",
+  "type": "armor",
+  "armor_type": "helmet",
+  "defense": 5,
+  "toughness": 2.0,
+  "durability": 400,
+  "rarity": "RARE",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_armor"
+}

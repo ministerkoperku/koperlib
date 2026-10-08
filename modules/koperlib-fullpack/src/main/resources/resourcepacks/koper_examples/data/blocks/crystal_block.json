@@ -1,0 +1,10 @@
+{
+  "id": "koper_lib:crystal_block",
+  "type": "block",
+  "hardness": 5.0,
+  "resistance": 12.0,
+  "light_level": 10,
+  "sound": "glass",
+  "transparent": true,
+  "creative_tab": "koper_lib:koper_blocks"
+}

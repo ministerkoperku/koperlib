@@ -1,0 +1,54 @@
+version = rootProject.version
+group = rootProject.group
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${rootProject.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_version}"
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+}
+
+java {
+    withSourcesJar()
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.withType(Jar).configureEach {
+    destinationDirectory = rootProject.layout.buildDirectory.dir('libs')
+}
+
+// Every module is publishable on its own. Consumers outside this build (kcast,
+// aq, mechanics dream) resolve them from mavenLocal instead of hardcoding paths
+// into build/libs, which silently rots whenever the version changes.
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            artifactId = base.archivesName.get()
+            from components.java
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
+}
+tasks.named('test') { failOnNoDiscoveredTests = false }
+
+def nativeJvmArgs = [
+    "-Djava.library.path=${rootProject.koperRustTarget.absolutePath}",
+    '--enable-native-access=ALL-UNNAMED'
+]
+tasks.named('runClient') { jvmArgs nativeJvmArgs }
+tasks.named('runServer') { jvmArgs nativeJvmArgs }

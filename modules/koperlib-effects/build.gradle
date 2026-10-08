@@ -1,0 +1,19 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-effects' }
+
+dependencies {
+    implementation project(':koperlib-core')
+    implementation project(':koperlib-kender')
+    compileOnly project(':koperlib-fullpack')
+
+    testImplementation platform('org.junit:junit-bom:5.12.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') { useJUnitPlatform() }

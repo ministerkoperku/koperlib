@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "package": "com.koper.koper_lib.elpe.mixin",
+  "plugin": "com.koper.koper_lib.coremod.KoperMixinKrzykacz",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ElpeLevelTickMixin",
+    "ElpeChunkBlockMixin",
+    "ElpeServerStopMixin",
+    "ElpeDisplayPoker",
+    "ElpeBlockDisplayPoker",
+    "ElpeExplosionMixin",
+    "ElpeRubbleNoSaveMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

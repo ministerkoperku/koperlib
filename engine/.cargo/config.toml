@@ -1,0 +1,4 @@
+# android/bionic cross build for zalith — recipe from the old working koperlib
+[target.aarch64-linux-android]
+linker = "/data/data/com.termux/files/usr/bin/clang"
+rustflags = ["-C", "link-arg=--target=aarch64-linux-android24", "-C", "link-arg=-fuse-ld=lld"]

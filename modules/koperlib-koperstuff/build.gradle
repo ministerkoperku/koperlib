@@ -1,0 +1,16 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-koperstuff' }
+dependencies {
+    implementation project(':koperlib-core')
+    implementation project(':koperlib-kender')
+    implementation project(':koperlib-fullpack')
+    implementation project(':koperlib-effects')
+    implementation project(':koperlib-kodel')
+    implementation project(':koperlib-khysics')
+    implementation project(':koperlib-specific')
+}

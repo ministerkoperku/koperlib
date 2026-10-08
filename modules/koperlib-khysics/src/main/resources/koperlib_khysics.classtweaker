@@ -1,0 +1,4 @@
+classTweaker v1 official
+
+# Moving-grid fallback rendering reads the same live camera state as Kender.
+accessible field net/minecraft/client/renderer/LevelRenderer levelRenderState Lnet/minecraft/client/renderer/state/level/LevelRenderState;

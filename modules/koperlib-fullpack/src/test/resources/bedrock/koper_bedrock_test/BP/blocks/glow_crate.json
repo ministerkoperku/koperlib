@@ -1,0 +1,32 @@
+{
+  "format_version": "1.21.40",
+  "minecraft:block": {
+    "description": {
+      "identifier": "kbt:glow_crate"
+    },
+    "components": {
+      "minecraft:destructible_by_mining": {
+        "seconds_to_destroy": 1.5
+      },
+      "minecraft:light_emission": 7,
+      "minecraft:destructible_by_explosion": {
+        "explosion_resistance": 15
+      },
+      "minecraft:material_instances": {
+        "*": {
+          "texture": "glow_crate",
+          "render_method": "opaque"
+        }
+      },
+      "minecraft:loot": "loot_tables/blocks/glow_crate.json",
+      "minecraft:tick": {
+        "interval_range": [
+          40,
+          40
+        ],
+        "looping": true
+      },
+      "kbt:crate": {}
+    }
+  }
+}

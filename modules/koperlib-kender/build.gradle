@@ -1,0 +1,19 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-kender' }
+loom { accessWidenerPath = file('src/main/resources/koperlib_kender.classtweaker') }
+
+dependencies {
+    implementation project(':koperlib-core')
+}
+
+// The Kender native ships here, not in Core. KenderNative is the resource anchor,
+// so the library has to live in the same jar as that class.
+processResources {
+    dependsOn rootProject.tasks.named('bundleKenderNative')
+    from(rootProject.layout.buildDirectory.dir('generated/native-kender'))
+}

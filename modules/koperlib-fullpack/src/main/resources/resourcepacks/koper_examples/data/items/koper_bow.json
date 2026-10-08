@@ -1,0 +1,8 @@
+{
+  "id": "koper_lib:koper_bow",
+  "type": "bow",
+  "durability": 800,
+  "rarity": "UNCOMMON",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_weapons"
+}

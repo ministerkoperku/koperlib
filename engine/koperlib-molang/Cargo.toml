@@ -1,0 +1,10 @@
+[package]
+name = "koperlib-molang"
+version = "0.1.0"
+edition = "2021"
+
+# bedrock molang, compiled once and run natively. shared by kodel (render side) and fullpack (bp side)
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]

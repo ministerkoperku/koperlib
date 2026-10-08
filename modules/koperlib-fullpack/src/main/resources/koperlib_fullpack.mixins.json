@@ -1,0 +1,41 @@
+{
+  "required": true,
+  "package": "com.koper.koper_lib.mixin",
+  "plugin": "com.koper.koper_lib.coremod.KoperMixinKrzykacz",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BedrockSelectorMixin",
+    "SimpleRegistryAccessor",
+    "SimpleRegistryMixin",
+    "ResourcePackManagerMixin",
+    "ResourcePackProfileMixin",
+    "ArmorEquipMixin",
+    "CraftingEventMixin",
+    "KoperSnitchAdvancementMixin",
+    "KoperSnitchGrabMixin",
+    "KoperSnitchPlaceMixin",
+    "BedrockGraczMixin",
+    "BedrockZyjeMixin",
+    "BedrockSwiatMixin",
+    "BedrockGadaMixin",
+    "BedrockCzatMixin",
+    "BedrockDialogMixin",
+    "BedrockOdrodzenieMixin",
+    "BedrockWidzeMixin",
+    "BedrockPociskMixin",
+    "BedrockTrybMixin",
+    "BedrockPodnosiMixin",
+    "BedrockMobekZbieraMixin",
+    "BedrockWyrzutMixin",
+    "BedrockGuzikMixin"
+  ],
+  "client": [
+    "BedrockHudTitleMixin",
+    "BedrockInputLockMixin",
+    "BedrockMovementLockMixin",
+    "BedrockKameraMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

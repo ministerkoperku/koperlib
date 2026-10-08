@@ -1,0 +1,5 @@
+classTweaker v1 official
+
+# KUI creates its own MenuType because the matching Fabric helper is unavailable on 26.2.
+accessible class net/minecraft/world/inventory/MenuType$MenuSupplier
+accessible method net/minecraft/world/inventory/MenuType <init> (Lnet/minecraft/world/inventory/MenuType$MenuSupplier;Lnet/minecraft/world/flag/FeatureFlagSet;)V

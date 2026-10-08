@@ -1,0 +1,40 @@
+{
+	"schemaVersion": 1,
+	"id": "koperlib_kodel",
+	"version": "${version}",
+	"name": "KoperLib Kodel",
+	"description": "Kodel universal binary model format. Fast Panama/Rust parser, full bone hierarchy, box and triangle geometry, keyframe animations with easing and smoothing. Kender-based replacement track for KGecko.",
+	"authors": [
+		"koper"
+	],
+	"license": "LGPL-3.0-only",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.koper.koper_lib.kodel.KoperKodelMod"
+		],
+		"client": [
+			"com.koper.koper_lib.kodel.KoperKodelClient"
+		],
+		"koperlib-kodel-bedrock": [
+			"com.koper.koper_lib.kodel.KodelBedrockKonwerter"
+		],
+		"koperlib-fullpack-addon": [
+			"com.koper.koper_lib.kodel.KodelFullpackAddon"
+		],
+		"koperlib-fullpack-client-addon": [
+			"com.koper.koper_lib.kodel.KodelFullpackClientAddon"
+		]
+	},
+	"depends": {
+		"koperlib_core": "*",
+		"koperlib_kender": "*",
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"mixins": [
+		"koperlib_kodel.mixins.json"
+	]
+}

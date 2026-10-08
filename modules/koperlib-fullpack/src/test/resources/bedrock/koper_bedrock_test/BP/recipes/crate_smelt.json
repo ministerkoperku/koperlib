@@ -1,0 +1,13 @@
+{
+  "format_version": "1.21.40",
+  "minecraft:recipe_furnace": {
+    "description": {
+      "identifier": "kbt:crate_smelt"
+    },
+    "tags": [
+      "furnace"
+    ],
+    "input": "kbt:glow_crate",
+    "output": "minecraft:glowstone"
+  }
+}

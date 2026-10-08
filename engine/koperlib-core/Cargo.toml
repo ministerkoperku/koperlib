@@ -1,0 +1,11 @@
+[package]
+name    = "koperlib-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name       = "koperlib_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+koperlib-kender = { path = "../koperlib-kender", features = ["vk"] }

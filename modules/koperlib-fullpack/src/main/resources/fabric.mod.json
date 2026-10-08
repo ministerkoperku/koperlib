@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "koperlib_fullpack",
+  "version": "${version}",
+  "name": "KoperLib Fullpack API",
+  "description": "Fullpacks, JSON/Lua content, Pack Java, KUI, state and Koper Actions.",
+  "authors": ["Koper"],
+  "license": "LGPL-3.0-only",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.koper.koper_lib.KoperLib"],
+    "client": ["com.koper.koper_lib.KoperLibClient"]
+  },
+  "mixins": ["koperlib_fullpack.mixins.json"],
+  "accessWidener": "koperlib_fullpack.classtweaker",
+  "depends": {
+    "koperlib_core": "*",
+    "fabricloader": ">=0.19.5",
+    "minecraft": ">=26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "koperlib_kodel": "*",
+    "koperlib_effects": "*",
+    "trinkets": "*",
+    "accessories": "*"
+  }
+}

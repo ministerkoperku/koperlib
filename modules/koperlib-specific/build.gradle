@@ -1,0 +1,13 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/module-common.gradle')
+base { archivesName = 'koperlib-specific' }
+dependencies {
+    implementation project(':koperlib-core')
+    // Optional at runtime, but when Khysics is present its interpolated target lets the shared
+    // placement renderer keep previews attached to moving grids.
+    compileOnly project(':koperlib-khysics')
+}

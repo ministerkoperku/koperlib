@@ -1,0 +1,10 @@
+[package]
+name    = "koperlib-scripting"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Lua 5.4 bundled — no system Lua required.
+# Switch feature to "luajit,vendored" once nasm is available in CI.
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+serde_json = "1"

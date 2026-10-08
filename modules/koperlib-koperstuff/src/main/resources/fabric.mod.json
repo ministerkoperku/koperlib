@@ -1,0 +1,36 @@
+{
+	"schemaVersion": 1,
+	"id": "koperlib_koperstuff",
+	"version": "${version}",
+	"name": "KoperLib Koperstuff",
+	"description": "Private development, stress and extremely verbose diagnostic mod.",
+	"authors": [
+		"Koper"
+	],
+	"license": "LGPL-3.0-only",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.koper.koper_lib.core.KoperstuffMod"
+		],
+		"client": [
+			"com.koper.koper_lib.core.KoperstuffClient"
+		]
+	},
+	"mixins": [
+		"koperlib_koperstuff.mixins.json"
+	],
+	"depends": {
+		"koperlib_core": "*",
+		"koperlib_kender": "*",
+		"koperlib_fullpack": "*",
+		"koperlib_effects": "*",
+		"koperlib_kodel": "*",
+		"koperlib_khysics": "*",
+		"koperlib_specific": "*",
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

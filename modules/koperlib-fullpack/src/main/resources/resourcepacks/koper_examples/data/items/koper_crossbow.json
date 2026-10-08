@@ -1,0 +1,8 @@
+{
+  "id": "koper_lib:koper_crossbow",
+  "type": "crossbow",
+  "durability": 600,
+  "rarity": "UNCOMMON",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_weapons"
+}

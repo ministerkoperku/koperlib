@@ -1,0 +1,23 @@
+{
+  "required": true,
+  "package": "com.koper.koper_lib.mixin",
+  "plugin": "com.koper.koper_lib.coremod.KoperMixinKrzykacz",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [
+    "KenderGeoDrawMixin",
+    "KenderLivingEntityMixin",
+    "KenderModelLayerMixin",
+    "KenderPassInjectMixin",
+    "KenderSubmitOrderMixin",
+    "LevelRendererSubmitAccessor",
+    "RenderSetupAccessor",
+    "RenderTextureBindingAccessor",
+    "RenderTypeAccessor",
+    "VulkanRenderPassAccessor",
+    "ModelPartAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

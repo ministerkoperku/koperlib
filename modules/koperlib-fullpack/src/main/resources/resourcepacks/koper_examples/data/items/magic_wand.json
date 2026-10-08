@@ -1,0 +1,9 @@
+{
+  "id": "koper_lib:magic_wand",
+  "type": "item",
+  "rarity": "EPIC",
+  "max_stack": 1,
+  "durability": 100,
+  "logic": "scripts/magic_wand.lua",
+  "creative_tab": "koper_lib:koper_weapons"
+}

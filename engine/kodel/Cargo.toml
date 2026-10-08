@@ -1,0 +1,11 @@
+[package]
+name = "kodel"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "koperlib_kodel_engine"
+crate-type = ["cdylib", "rlib"]
+[dependencies]
+koperlib-molang = { path = "../koperlib-molang" }
+serde_json = { version = "1", features = ["preserve_order"] }  # bedrock json: later keys win, order matters

@@ -1,0 +1,9 @@
+{
+  "id": "koper_lib:koper_spear",
+  "type": "spear",
+  "durability": 500,
+  "damage": 15,
+  "rarity": "RARE",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_weapons"
+}

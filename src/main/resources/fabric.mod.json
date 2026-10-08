@@ -1,0 +1,28 @@
+{
+	"schemaVersion": 1,
+	"id": "koper_lib",
+	"version": "${version}",
+	"name": "KoperLib (development)",
+	"description": "Development aggregator for running every KoperLib module from this workspace. Releases ship as KoperLib Core, KoperLib Fullpack APIs and KoperLib Khysics (gradlew releaseJars).",
+	"authors": [
+		"Koper"
+	],
+	"contact": {},
+	"license": "LGPL-3.0-only",
+	"environment": "*",
+	"depends": {
+		"koperlib_core": "*",
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"koperlib_kender": "*",
+		"koperlib_fullpack": "*",
+		"koperlib_effects": "*",
+		"koperlib_kodel": "*",
+		"koperlib_khysics": "*",
+		"koperlib_specific": "*"
+	}
+}

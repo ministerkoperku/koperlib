@@ -1,0 +1,10 @@
+{
+  "id": "koper_lib:koper_pickaxe",
+  "type": "pickaxe",
+  "damage": 6,
+  "durability": 1800,
+  "mining_speed": 12.0,
+  "rarity": "UNCOMMON",
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_tools"
+}

@@ -1,0 +1,6 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "koper_ships:steering_wheel", "required": false }
+  ]
+}

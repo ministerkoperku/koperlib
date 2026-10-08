@@ -1,0 +1,7 @@
+{
+  "id": "koper_lib:koper_gem",
+  "type": "item",
+  "rarity": "RARE",
+  "max_stack": 64,
+  "creative_tab": "koper_lib:koper_materials"
+}

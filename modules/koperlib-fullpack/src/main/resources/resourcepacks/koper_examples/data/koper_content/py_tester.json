@@ -1,0 +1,8 @@
+{
+  "type": "item",
+  "id": "koper_lib:py_tester",
+  "name": "Python Tester",
+  "preset": "blaze_rod",
+  "logic": "data/koper_content/scripts/test.py",
+  "creativeTab": "koper_lib:main"
+}

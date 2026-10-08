@@ -1,0 +1,12 @@
+{
+  "id": "koper_lib:koper_chestplate",
+  "type": "armor",
+  "armor_type": "chestplate",
+  "defense": 10,
+  "toughness": 3.0,
+  "durability": 600,
+  "rarity": "EPIC",
+  "fireproof": true,
+  "max_stack": 1,
+  "creative_tab": "koper_lib:koper_armor"
+}
