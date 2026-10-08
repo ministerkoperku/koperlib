@@ -63,6 +63,16 @@ public final class KfxGraphCompiler {
             stage.addProperty("primitive", KfxNodeSchemas.primitiveName(node.type()));
             stage.addProperty("op", KfxNodeSchemas.primitiveName(node.type()));
             values.forEach((name, value) -> add(stage, name, value));
+            if (node.type().equals(KfxNodeSchemas.RENDER_FX)) {
+                // an fx keeps up to `count` live particles of its own; they count against the budget
+                stage.addProperty("seed", (KfxRandom.derivedSeed(castSeed, nodeId) >>> 40) & 0xFFFFFFL);
+                totalParticles[0] = Math.addExact(totalParticles[0], integer(values, "count", nodeId));
+                if (totalParticles[0] > graph.budget().maxParticles()
+                    || totalParticles[0] > KfxLimits.HARD_MAX_PARTICLES_PER_GRAPH) {
+                    throw new KfxGraphException(graph.source(), "$.nodes." + nodeId + ".count",
+                        "resolved total " + totalParticles[0] + " exceeds max_particles " + graph.budget().maxParticles());
+                }
+            }
             stages.add(stage);
             return;
         }

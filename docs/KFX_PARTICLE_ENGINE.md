@@ -541,6 +541,64 @@ and are drawn on the Java side on every backend; the native particle batch only 
 `/koperlib kfx gallery` (Koperstuff) spawns every particle style, a sigil, a spiral and every laser
 style in front of the player for side by side comparison.
 
+### Java fx: stateful effects
+
+`koper_lib:render/fx` hands one node of a graph to a registered Java effect. Unlike the stateless
+sources above, an fx keeps its own particles on the client: they are born, live, slow down, curl
+through a noise field, change colour over their life and leave motion streaks or trails. JSON and Lua
+still compose the spell; Java owns what happens every frame. Nothing runs on the server.
+
+| field | default | meaning |
+|---|---|---|
+| `fx` | required | registered effect id, may be a graph input |
+| `color` | `#FFFFFFFF` | main colour |
+| `core_color` | transparent | hot colour; transparent means a near white tint of `color` |
+| `size` | `0.12` | base scale: beam radius for a laser, body radius for an object |
+| `count` | `96` | most live particles; a constant or cast random, counted against the budget and scaled by quality |
+| `intensity` | `1.0` | 0..4, how many layers an effect shows; rarer rolls pass more |
+| `speed` | `1.0` | animation speed |
+| `variant` | `0` | effect specific choice, such as an object's shape |
+| `glow`, `noise` | `1.0`, `0.0` | glow strength and effect specific turbulence |
+
+Built-in effects:
+
+| id | look |
+|---|---|
+| `koper_lib:laser/lance` | clean beam shedding sparks, splash at the target |
+| `koper_lib:laser/ember` | warm flickering beam giving off embers that rise and curl |
+| `koper_lib:laser/storm` | crackling bolt with extra arcs re-rolled around it |
+| `koper_lib:laser/helix` | two ribbons of light twisting around a thin core, gems riding them |
+| `koper_lib:laser/rift` | dark core with a bright rim, pulling streaks and shards into itself |
+| `koper_lib:laser/prism` | one beam splitting into three hues that rejoin at the target |
+| `koper_lib:laser/comet` | comets with long tails spiralling into a turning sigil |
+| `koper_lib:laser/serpent` | a living ribbon coiling along the beam, shedding glowing scales |
+| `koper_lib:object/relic` | solid body (`variant`: gem, cube, tetra, shard, orb, ring, star) wrapped in light; motes always, orbiting satellites from intensity 1, rings and a motion trail from 1.4, arcs and shock pulses from 2 |
+| `koper_lib:burst/nova` | one-shot flash, shockwave rings, spark spray and drifting embers |
+
+```lua
+koper.kfx.graph("mymod:spell/laser")
+  :input("color", "color", "#ffb967ff")
+  :input("laser", "text", "koper_lib:laser/storm")
+  :node("laser", "koper_lib:render/fx", {
+    fx = { input = "laser" }, color = { input = "color" }, intensity = 1.5, count = 160
+  })
+  :output("laser")
+  :budget(200, 72000)
+  :register()
+```
+
+A new effect implements `KfxFx` and registers on the client with
+`KfxFxBook.register("mymod:laser/frost", spec -> new Frost(spec))`. `update(frame)` runs once per
+rendered frame with the elapsed ticks in `frame.dt`; `draw(frame, paint)` runs for the solid pass and
+again for the additive glow pass. Positions live in simulation space, where the start anchor at birth is
+the origin, so particles stay in the world while anchors move. `KfxSwarm` is an allocation free particle
+pool with drag, gravity and curl noise; `KfxPaint` draws glows, motion streaks, camera facing ribbons,
+flat rings, lens flares, lit meshes and the built-in laser. Light falls back to a dimmer translucent
+version in the main pass when the glow pass is off. An unregistered id or an effect that throws logs one
+error and that node stops drawing; the rest of the graph keeps going.
+
+`KOPER_KFX_PODGLAD=fx` with the dev client photographs every built-in fx by night and by day.
+
 ### Cosmetic particle collision
 
 Stateful native emitters can opt into a bounded local voxel field. This is deliberately separate from

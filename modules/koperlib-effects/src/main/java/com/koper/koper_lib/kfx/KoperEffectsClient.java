@@ -10,6 +10,7 @@ public final class KoperEffectsClient implements ClientModInitializer {
     public void onInitializeClient() {
         KfxClient.initClock();
         KfxRenderer.init();
+        com.koper.koper_lib.kfx.fx.builtin.KfxBuiltinFx.register();
         KfxNetworking.initClient();
         com.koper.koper_lib.api.core.KenderEffectsBridge.install(
             new com.koper.koper_lib.api.core.KenderEffectsBridge.Provider() {

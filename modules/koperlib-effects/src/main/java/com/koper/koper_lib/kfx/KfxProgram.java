@@ -76,6 +76,10 @@ public final class KfxProgram {
         public int coreColor, segments = 12;
         public float core = 0.4f, glow = 1.0f, flicker = 0.12f, taper, noise;
         public String caps = "both";
+        // render/fx: which registered Java effect draws this stage, plus its tuning
+        public String fx = "";
+        public float intensity = 1.0f;
+        public int variant;
 
         static Op parse(JsonObject json) {
             Op op = new Op();
@@ -112,6 +116,9 @@ public final class KfxProgram {
             op.noise = Math.clamp(KfxDef.flt(json, "noise", 0.0f), 0.0f, 8.0f);
             op.segments = Math.clamp((int)KfxDef.flt(json, "segments", 12.0f), 4, 64);
             op.caps = KfxDef.str(json, "caps", op.caps).toLowerCase(java.util.Locale.ROOT);
+            op.fx = KfxDef.str(json, "fx", "");
+            op.intensity = Math.clamp(KfxDef.flt(json, "intensity", 1.0f), 0.0f, 4.0f);
+            op.variant = (int)KfxDef.flt(json, "variant", 0.0f);
             return op;
         }
 

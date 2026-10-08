@@ -31,6 +31,8 @@ public final class KfxOps {
         builtin("decal", 12, false);
         builtin("light", 13, false);
         builtin("group", 14, false);
+        // a registered Java effect with its own simulation, see kfx.fx.KfxFxBook
+        builtin("fx", 15, false, "program", "script");
     }
 
     private static void builtin(String name, int opcode, boolean batch, String... aliases) {

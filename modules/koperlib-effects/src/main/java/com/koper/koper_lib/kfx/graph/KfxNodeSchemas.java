@@ -17,10 +17,11 @@ final class KfxNodeSchemas {
     static final String RENDER_MESH = "koper_lib:render/mesh";
     static final String RENDER_DECAL = "koper_lib:render/decal";
     static final String RENDER_LIGHT = "koper_lib:render/light";
+    static final String RENDER_FX = "koper_lib:render/fx";
     static final String GROUP = "koper_lib:group";
 
     private static final Set<String> RENDERS = Set.of(RENDER_PARTICLES, RENDER_BEAM, RENDER_RIBBON,
-        RENDER_TRAIL, RENDER_MESH, RENDER_DECAL, RENDER_LIGHT);
+        RENDER_TRAIL, RENDER_MESH, RENDER_DECAL, RENDER_LIGHT, RENDER_FX);
 
     private static final Map<String, Schema> SCHEMAS = Map.ofEntries(
         Map.entry(SOURCE_RING, new Schema(
@@ -127,9 +128,23 @@ final class KfxNodeSchemas {
             optional("radius", KfxResolvedValue.number(4.0)), optional("intensity", KfxResolvedValue.number(1.0)),
             optional("color", KfxResolvedValue.color(0xFFFFFFFF)), optional("priority", KfxResolvedValue.text("decorative"))
         )),
+        Map.entry(RENDER_FX, primitive(
+            required("fx", KfxValueType.TEXT, true, true),
+            optional("color", KfxResolvedValue.color(0xFFFFFFFF)),
+            optional("core_color", KfxResolvedValue.color(0x00000000)),
+            optional("size", KfxResolvedValue.number(0.12)),
+            fixedInput("count", KfxResolvedValue.integer(96)),
+            optional("intensity", KfxResolvedValue.number(1.0)),
+            optional("speed", KfxResolvedValue.number(1.0)),
+            optional("variant", KfxResolvedValue.integer(0)),
+            optional("glow", KfxResolvedValue.number(1.0)),
+            optional("noise", KfxResolvedValue.number(0.0)),
+            optional("alpha", KfxResolvedValue.number(1.0)),
+            optional("priority", KfxResolvedValue.text("core"))
+        )),
         Map.entry(GROUP, new Schema(Map.of(), Map.of("children", new Link(true, true,
             Set.of(RENDER_PARTICLES, RENDER_BEAM, RENDER_RIBBON, RENDER_TRAIL, RENDER_MESH,
-                RENDER_DECAL, RENDER_LIGHT, GROUP)))))
+                RENDER_DECAL, RENDER_LIGHT, RENDER_FX, GROUP)))))
     );
 
     private KfxNodeSchemas() {}
@@ -158,6 +173,11 @@ final class KfxNodeSchemas {
 
     private static Property optional(String name, KfxResolvedValue value) {
         return new Property(name, value.type(), false, value, true, true);
+    }
+
+    // a constant or a cast-time random, never an unbounded input: it is a particle budget
+    private static Property fixedInput(String name, KfxResolvedValue value) {
+        return new Property(name, value.type(), false, value, false, true);
     }
 
     private static Property fixed(String name, KfxResolvedValue value) {

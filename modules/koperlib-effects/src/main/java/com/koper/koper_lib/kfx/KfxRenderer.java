@@ -42,9 +42,11 @@ public final class KfxRenderer {
     private static final int STYLE_GEM = 8;
     private static boolean whiteUploaded;
     // the glow pass re-walks every effect and only lays additive halos; quad()/tri() draw nothing then
-    private static boolean glowPass;
+    static boolean glowPass;
+    // false when the additive glow pass is off this frame (low quality or no pipeline)
+    static boolean glowActive;
     // camera in the current effect's local frame, for rim light and particle LOD
-    private static float camX, camY, camZ;
+    static float camX, camY, camZ;
     private static float animTicks;
 
     // data-driven 2D/3D pick per op/effect: auto+3d = real mesh, 2d = cheap billboard. set before particles draw
@@ -93,9 +95,11 @@ public final class KfxRenderer {
             drawProgramRingBand(ctx.pose, ctx.consumer, ctx.basis, op, ctx.eased, ctx.spin, ctx.opColor));
         KfxOps.registerDraw("light", (ctx, op) -> {});
         KfxOps.registerDraw("group", (ctx, op) -> {});
+        KfxOps.registerDraw("fx", KfxFxHost::draw);
     }
 
     public static void clearRuntime() {
+        KfxFxHost.clear();
         EMITTERS.clear();
         PROGRAMS.clear();
         NATIVE_READY.clear();
@@ -105,12 +109,14 @@ public final class KfxRenderer {
 
     // drop the parsed program + emitter state, but NOT native-ready (spawn sets that a moment earlier)
     static void dropProgram(long id) {
+        KfxFxHost.drop(id);
         EMITTERS.remove(id);
         PROGRAMS.remove(id);
         NEEDS_CPU.remove(id);
     }
 
     static void dropRuntime(long id) {
+        KfxFxHost.drop(id);
         EMITTERS.remove(id);
         PROGRAMS.remove(id);
         NATIVE_READY.remove(id);
@@ -168,6 +174,7 @@ public final class KfxRenderer {
                 == com.koper.koper_lib.kfx.render.KfxQuality.LOW ? null : KfxGlow.type();
             // The previous pass has to prove it drew. Device-ready alone is not enough or native ops vanish.
             boolean gpu = gpuOwnsNativeParticles();
+            glowActive = glow != null;
 
             for (KfxInstance fx : KfxClient.live()) {
                 if (gpu && nativeReady(fx.id)) {
