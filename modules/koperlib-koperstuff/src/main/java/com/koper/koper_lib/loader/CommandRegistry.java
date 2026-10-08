@@ -286,6 +286,8 @@ public class CommandRegistry {
                     .executes(ctx -> executeKfxList(ctx.getSource())))
                 .then(Commands.literal("clear")
                     .executes(ctx -> executeKfxClear(ctx.getSource())))
+                .then(Commands.literal("gallery")
+                    .executes(ctx -> executeKfxGallery(ctx.getSource())))
                 .then(Commands.literal("inspect")
                     .then(Commands.argument("handle", LongArgumentType.longArg())
                         .executes(ctx -> executeKfxInspect(ctx.getSource(),
@@ -759,6 +761,19 @@ public class CommandRegistry {
         source.sendSystemMessage(Component.literal("[KFX] Spawned " + def.id() + " handle=" + handle
             + " (/koperlib kfx inspect " + handle + ")."));
         return 1;
+    }
+
+    private static int executeKfxGallery(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendSystemMessage(Component.literal("[KFX] Player only."));
+            return 0;
+        }
+        int n = com.koper.koper_lib.core.KfxGallery.spawn((ServerLevel) player.level(),
+            player.getEyePosition(), player.getLookAngle(), 7.0);
+        source.sendSystemMessage(Component.literal("[KFX] Gallery: " + n + " effects, styles "
+            + String.join(", ", com.koper.koper_lib.core.KfxGallery.STYLES) + " (row by row)."));
+        return n;
     }
 
     private static int executeKfxDemo(CommandSourceStack source, com.koper.koper_lib.kfx.KfxDef.Kind kind) {

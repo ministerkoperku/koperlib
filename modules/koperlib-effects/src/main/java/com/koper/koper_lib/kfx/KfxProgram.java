@@ -72,6 +72,10 @@ public final class KfxProgram {
         public float x, y, z, seed, speed = 1.0f;
         public int count, color;
         public int points = 5, skip = 2;
+        // beam look, see KfxBeams
+        public int coreColor, segments = 12;
+        public float core = 0.4f, glow = 1.0f, flicker = 0.12f, taper, noise;
+        public String caps = "both";
 
         static Op parse(JsonObject json) {
             Op op = new Op();
@@ -100,6 +104,14 @@ public final class KfxProgram {
             op.color = KfxDef.parseColor(KfxDef.str(json, "color", ""), 0);
             op.points = Math.clamp((int)KfxDef.flt(json, "points", 5.0f), 3, 16);
             op.skip = Math.clamp((int)KfxDef.flt(json, "skip", 2.0f), 1, Math.max(1, op.points / 2));
+            op.coreColor = KfxDef.parseColor(KfxDef.str(json, "core_color", ""), 0);
+            op.core = Math.clamp(KfxDef.flt(json, "core", op.core), 0.0f, 1.0f);
+            op.glow = Math.clamp(KfxDef.flt(json, "glow", op.glow), 0.0f, 4.0f);
+            op.flicker = Math.clamp(KfxDef.flt(json, "flicker", op.flicker), 0.0f, 1.0f);
+            op.taper = Math.clamp(KfxDef.flt(json, "taper", 0.0f), 0.0f, 1.0f);
+            op.noise = Math.clamp(KfxDef.flt(json, "noise", 0.0f), 0.0f, 8.0f);
+            op.segments = Math.clamp((int)KfxDef.flt(json, "segments", 12.0f), 4, 64);
+            op.caps = KfxDef.str(json, "caps", op.caps).toLowerCase(java.util.Locale.ROOT);
             return op;
         }
 

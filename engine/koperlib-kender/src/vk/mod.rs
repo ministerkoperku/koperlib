@@ -8,6 +8,8 @@ pub mod pass;
 pub mod buffer;
 pub mod geo;
 pub mod particles;
+#[cfg_attr(not(feature = "vk"), allow(dead_code))]
+pub mod meshes;
 
 use std::sync::OnceLock;
 

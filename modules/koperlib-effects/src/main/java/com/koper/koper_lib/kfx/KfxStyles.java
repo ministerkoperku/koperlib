@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-// particle look registry. builtins keep codes 0-7 (drawn by KfxRenderer's switch),
+// particle look registry. builtins keep codes 0-8 (drawn by KfxRenderer's switch),
 // addon styles grab codes >=100 and bring their own KfxStyle draw lambda.
 public final class KfxStyles {
     private static final Map<String, Integer> CODES = new ConcurrentHashMap<>();
@@ -22,6 +22,7 @@ public final class KfxStyles {
         alias("cube", 5); alias("box", 5); alias("voxel", 5);
         alias("tetra", 6); alias("tetrahedron", 6); alias("pyramid", 6);
         alias("orb3d", 7); alias("orb", 7); alias("mini_sphere", 7);
+        alias("gem", 8); alias("octa", 8); alias("octahedron", 8);
         alias("sphere3d", 7); alias("ball", 7); alias("sphere", 7);
     }
 

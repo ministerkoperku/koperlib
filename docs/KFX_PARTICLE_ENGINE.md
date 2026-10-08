@@ -426,7 +426,7 @@ both native and portable lowerings:
 | node type | main fields | portable/native meaning |
 |---|---|---|
 | `koper_lib:render/particles` | `source`, `count`, `size`, `style`, `color`, `priority` | instanced sprites/small 3D meshes |
-| `koper_lib:render/beam` | `thickness`, `style`, `color`, `material` | tube/prism from start to end |
+| `koper_lib:render/beam` | `thickness`, `style`, `color`, `core_color`, `glow` and more, see [Lasers](#lasers) | laser from start to end: hot core, light sheath, glow, end flares |
 | `koper_lib:render/ribbon` | `thickness`, `points`, `color`, `material` | bounded waving strip along anchors |
 | `koper_lib:render/trail` | `thickness`, `points`, `color`, `material` | tapered anchor-history silhouette |
 | `koper_lib:render/mesh` | `mesh`, `scale`, `color`, `material` | registered 3D geometry instance |
@@ -469,6 +469,77 @@ Example core beam plus optional details:
   }
 }
 ```
+
+### Particle styles and look
+
+`style` on a `render/particles` node picks the shape of every particle. 3D styles are real meshes that
+tumble slowly about a random axis of their own, so a ring of cubes never shows the same face twice.
+
+| style | aliases | shape |
+|---|---|---|
+| `sprite` | | soft round glow with a white hot middle, no mesh |
+| `spark` | `streak`, `trail` | thin needle; an emitter spark streaks along its motion |
+| `star` | `flare` | six spikes on a small core |
+| `ring` | `halo` | torus |
+| `shard` | `diamond`, `crystal` | long six sided crystal |
+| `cube` | `box`, `voxel` | cube |
+| `tetra` | `tetrahedron`, `pyramid` | tetrahedron |
+| `orb3d` | `orb`, `sphere`, `ball`, `sphere3d`, `mini_sphere` | smooth sphere (the default) |
+| `gem` | `octa`, `octahedron` | faceted octahedron |
+
+Every mesh is lit the same way on both backends: a key light from above, a sky fill, and a pale fresnel
+rim that brightens the silhouette. Each particle varies its brightness slightly from its seed, so a ring
+of one colour does not read as a flat cutout. An additive halo sits around every particle; it is full
+strength in the dark and toned down in daylight, where added light would only wash the scene out. The
+`low` quality tier drops halos. On the portable path a sphere only a few pixels wide is drawn as the gem.
+`"dim": "2d"` still selects the cheaper flat forms.
+
+### Lasers
+
+`koper_lib:render/beam` draws a laser between the effect's start and end anchors. The colour is mostly
+light: a near white core, a translucent sheath that is dense through its middle and clear at its edge,
+bands of brightness flowing toward the end, a bright band and a wide soft glow added on top, and a flare
+at each end.
+
+| field | default | meaning |
+|---|---|---|
+| `style` | `tube` | `tube`, `square` (solid prism), `lightning` (jagged bolt with a branch, re-rolled while it lives), `helix` (two strands twisting around a core), `pulse` (energy beads riding toward the end) |
+| `thickness` | `0.12` | sheath radius in blocks |
+| `color` | `#FFFFFFFF` | sheath and glow colour |
+| `core_color` | `#00000000` | core colour; fully transparent means a near white tint of `color` |
+| `core` | `0.4` | core radius as a fraction of `thickness` |
+| `glow` | `1.0` | wide glow strength and width, `0` turns it off (0..4) |
+| `flicker` | `0.12` | how much the width breathes over time (0..1) |
+| `taper` | `0.0` | how much thinner the end is than the start (0..1) |
+| `noise` | `0.0` | sideways waving in blocks; for `lightning` the jag amplitude (default 2.5 x `thickness`) |
+| `speed` | `1.0` | animation speed of bands, waving, bolts, strands and beads |
+| `segments` | `12` | joints of a `lightning` bolt (4..64) |
+| `caps` | `both` | end flares: `both`, `start`, `end`, `none` |
+
+An unknown `style` logs one error naming the valid styles and draws a tube.
+
+```json
+{
+  "version": 2,
+  "id": "aq:storm_lance",
+  "nodes": {
+    "bolt": {"type":"koper_lib:render/beam", "style":"lightning", "thickness":0.08,
+             "color":"#b9a0ff", "segments":16, "glow":1.4, "caps":"end"},
+    "lance": {"type":"koper_lib:render/beam", "style":"helix", "thickness":0.14,
+              "color":"#66ffb0", "speed":2.0, "taper":0.5},
+    "root": {"type":"koper_lib:group", "children":["bolt","lance"]}
+  },
+  "outputs": ["root"],
+  "budget": { "max_particles": 64, "lifetime": 40 }
+}
+```
+
+`ribbon` and `trail` use the same drawing: a ribbon waves by default and a trail thins toward its end;
+both read `noise`, `taper`, `glow` and `speed`. Beams, ribbons, trails, meshes and decals are geometry
+and are drawn on the Java side on every backend; the native particle batch only carries particles.
+
+`/koperlib kfx gallery` (Koperstuff) spawns every particle style, a sigil, a spiral and every laser
+style in front of the player for side by side comparison.
 
 ### Cosmetic particle collision
 

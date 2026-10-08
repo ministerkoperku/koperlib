@@ -111,7 +111,7 @@ Lua entrypoints:
 }
 ```
 
-Particle styles: `sprite`, `spark`, `star`, `ring`, `shard`, `cube`, `tetra`, `orb3d`.
+Particle styles: `sprite`, `spark`, `star`, `ring`, `shard`, `cube`, `tetra`, `orb3d`, `gem`. Shapes and lighting are described in [the KFX guide](KFX_PARTICLE_ENGINE.md#particle-styles-and-look).
 
 Emitter shapes: `point`, `ring`, `beam`, `cone`, `sphere`.
 
@@ -266,9 +266,9 @@ An op with `opcode = -1` is java-only: kender ignores it, the MC path always dra
 Shapes are actual 3D geometry (CPU-generated triangles submitted through MC's Vulkan pipeline via `COLLECT_SUBMITS`, zero raw GL), not crossed planes:
 
 - **sphere / particle kinds** → solid UV sphere, per-face shaded
-- **orb3d style** → cheap 8-tri octahedron (the 3D "orb"); reads as a faceted ball at particle scale
-- **cube / tetra styles** → real solid box / tetrahedron
-- **beam / laser** → oriented 3D tube; `"style": "box"` (or `square`/`cube`/`rect`/`prism`) = square laser, else round. Width = `thickness`, length = start→end endpoints.
+- **orb3d style** → smooth sphere; the faceted octahedron it used to be is now the `gem` style
+- **cube / tetra / shard / star / ring styles** → real solid box, tetrahedron, crystal, spiked star and torus
+- **beam / laser** → laser with core, sheath, glow and end flares; `"style"` picks `tube`, `square` (also `box`/`cube`/`rect`/`prism`), `lightning`, `helix` or `pulse`. Width = `thickness`, length = start→end endpoints. All options are in [the KFX guide](KFX_PARTICLE_ENGINE.md#lasers).
 
 Every mesh style also has a cheap 2D form (flat billboard / flat star). Pick per op or effect with `dim`:
 

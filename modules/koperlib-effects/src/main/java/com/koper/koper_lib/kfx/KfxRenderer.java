@@ -39,7 +39,13 @@ public final class KfxRenderer {
     private static final int MOTION_INWARD = 2;
     private static final int MOTION_SWIRL = 3;
     private static final Particle TMP_PARTICLE = new Particle();
+    private static final int STYLE_GEM = 8;
     private static boolean whiteUploaded;
+    // the glow pass re-walks every effect and only lays additive halos; quad()/tri() draw nothing then
+    private static boolean glowPass;
+    // camera in the current effect's local frame, for rim light and particle LOD
+    private static float camX, camY, camZ;
+    private static float animTicks;
 
     // data-driven 2D/3D pick per op/effect: auto+3d = real mesh, 2d = cheap billboard. set before particles draw
     private static final int DIM_AUTO = 0, DIM_2D = 1, DIM_3D = 2;
@@ -60,11 +66,11 @@ public final class KfxRenderer {
             drawProgramRingBand(ctx.pose, ctx.consumer, ctx.basis, op, ctx.eased, ctx.spin, ctx.opColor));
         KfxOps.registerDraw("orb", (ctx, op) ->
             particleAt(ctx.pose, ctx.consumer, op.style, ctx.basis, op.x, op.y, op.z,
-                op.size > 0.0f ? op.size : ctx.fx.thickness, ctx.opColor, ctx.fx.id + op.seed));
+                op.size > 0.0f ? op.size : ctx.fx.thickness, ctx.opColor, seedBase(ctx.fx) + op.seed));
         KfxOps.registerDraw("beam", (ctx, op) -> {
-            if (ctx.age >= op.from) drawBeam3D(ctx.pose, ctx.consumer, ctx.fx,
+            if (ctx.age >= op.from) drawBeam3D(ctx.pose, ctx.consumer, ctx.fx, op, ctx.age,
                 ctx.pulse * Math.max(0.05f, op.thickness <= 0.0f ? 1.0f : op.thickness / Math.max(0.01f, ctx.fx.thickness)),
-                ctx.fade * ctx.eased * op.alpha, squareBeam(op.style));
+                ctx.fade * ctx.eased * op.alpha);
         });
         KfxOps.registerDraw("burst_ring", (ctx, op) ->
             drawProgramBurstRing(ctx.pose, ctx.consumer, ctx.fx, ctx.basis, op, ctx.eased, ctx.spin, ctx.opColor));
@@ -73,16 +79,16 @@ public final class KfxRenderer {
         KfxOps.registerDraw("spiral", (ctx, op) ->
             drawProgramSpiral(ctx.pose, ctx.consumer, ctx.fx, ctx.basis, op, ctx.eased, ctx.spin, ctx.opColor));
         KfxOps.registerDraw("ribbon", (ctx, op) -> {
-            if (ctx.age >= op.from) drawBeam3D(ctx.pose, ctx.consumer, ctx.fx,
-                Math.max(0.35f, op.thickness / Math.max(0.01f, ctx.fx.thickness)), ctx.fade * op.alpha, false);
+            if (ctx.age >= op.from) drawBeam3D(ctx.pose, ctx.consumer, ctx.fx, op, ctx.age,
+                Math.max(0.35f, op.thickness / Math.max(0.01f, ctx.fx.thickness)), ctx.fade * op.alpha);
         });
         KfxOps.registerDraw("trail", (ctx, op) -> {
-            if (ctx.age >= op.from) drawBeam3D(ctx.pose, ctx.consumer, ctx.fx,
-                Math.max(0.2f, op.thickness / Math.max(0.01f, ctx.fx.thickness)), ctx.fade * op.alpha, false);
+            if (ctx.age >= op.from) drawBeam3D(ctx.pose, ctx.consumer, ctx.fx, op, ctx.age,
+                Math.max(0.2f, op.thickness / Math.max(0.01f, ctx.fx.thickness)), ctx.fade * op.alpha);
         });
         KfxOps.registerDraw("mesh", (ctx, op) ->
             particleAt(ctx.pose, ctx.consumer, STYLE_ORB3D, ctx.basis, op.x, op.y, op.z,
-                op.size > 0 ? op.size : Math.max(0.2f, ctx.fx.radius), ctx.opColor, ctx.fx.id + op.seed));
+                op.size > 0 ? op.size : Math.max(0.2f, ctx.fx.radius), ctx.opColor, seedBase(ctx.fx) + op.seed));
         KfxOps.registerDraw("decal", (ctx, op) ->
             drawProgramRingBand(ctx.pose, ctx.consumer, ctx.basis, op, ctx.eased, ctx.spin, ctx.opColor));
         KfxOps.registerDraw("light", (ctx, op) -> {});
@@ -150,8 +156,16 @@ public final class KfxRenderer {
             Minecraft mc = Minecraft.getInstance();
             if (mc.level == null) return;
             if (!uploadWhiteTexture()) return;
-            Vec3 cam = mc.gameRenderer.mainCamera().position();
+            var camera = mc.gameRenderer.mainCamera();
+            Vec3 cam = camera.position();
             PoseStack poseStack = ctx.poseStack();
+            KfxGlow.setCamera(camera.leftVector(), camera.upVector());
+            var at = net.minecraft.core.BlockPos.containing(cam);
+            int light = Math.max(mc.level.getBrightness(net.minecraft.world.level.LightLayer.SKY, at) - mc.level.getSkyDarken(),
+                mc.level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, at));
+            KfxGlow.ambient = 1.0f - 0.5f * Math.clamp(light, 0, 15) / 15.0f;
+            var glow = com.koper.koper_lib.kfx.render.KfxQuality.configured()
+                == com.koper.koper_lib.kfx.render.KfxQuality.LOW ? null : KfxGlow.type();
             // The previous pass has to prove it drew. Device-ready alone is not enough or native ops vanish.
             boolean gpu = gpuOwnsNativeParticles();
 
@@ -163,8 +177,11 @@ public final class KfxRenderer {
                 }
                 poseStack.pushPose();
                 poseStack.translate(fx.sx - cam.x, fx.sy - cam.y, fx.sz - cam.z);
+                float cx = (float)(cam.x - fx.sx), cy = (float)(cam.y - fx.sy), cz = (float)(cam.z - fx.sz);
                 ctx.submitNodeCollector().submitCustomGeometry(poseStack, RenderTypes.entityTranslucent(WHITE),
-                    (pose, consumer) -> drawFx(pose, consumer, fx));
+                    (pose, consumer) -> drawFx(pose, consumer, fx, cx, cy, cz, false));
+                if (glow != null) ctx.submitNodeCollector().submitCustomGeometry(poseStack, glow,
+                    (pose, consumer) -> drawFx(pose, consumer, fx, cx, cy, cz, true));
                 poseStack.popPose();
             }
         });
@@ -180,6 +197,18 @@ public final class KfxRenderer {
             return true;
         } catch (IllegalStateException e) {
             return false;
+        }
+    }
+
+    private static void drawFx(PoseStack.Pose pose, VertexConsumer consumer, KfxInstance fx,
+                               float cx, float cy, float cz, boolean glow) {
+        glowPass = glow;
+        camX = cx; camY = cy; camZ = cz;
+        animTicks = KfxClient.nowTicks();
+        try {
+            drawFx(pose, consumer, fx);
+        } finally {
+            glowPass = false;
         }
     }
 
@@ -205,27 +234,34 @@ public final class KfxRenderer {
     }
 
     static void drawBeam(PoseStack.Pose pose, VertexConsumer c, KfxInstance fx, float widthMul, float fade) {
-        drawBeam3D(pose, c, fx, widthMul, fade, false);
+        drawBeam3D(pose, c, fx, null, fx.ageTicks(), widthMul, fade);
     }
 
-    // real 3D laser: oriented tube (round) or prism (square) start->end, variable width/length + bright core
-    static void drawBeam3D(PoseStack.Pose pose, VertexConsumer c, KfxInstance fx, float widthMul, float fade, boolean square) {
+    // the laser look for beam, ribbon and trail ops (and old definition beams, op == null)
+    static void drawBeam3D(PoseStack.Pose pose, VertexConsumer c, KfxInstance fx, KfxProgram.Op op, float age,
+                           float widthMul, float fade) {
         float lx = fx.ex - fx.sx, ly = fx.ey - fx.sy, lz = fx.ez - fx.sz;
         float len = (float)Math.sqrt(lx * lx + ly * ly + lz * lz);
         if (len < 1.0e-4f) return;
-        float fxn = lx / len, fyn = ly / len, fzn = lz / len;
-        float r = Math.max(0.01f, fx.thickness * widthMul);
-        int segs = square ? 4 : 14;
-        tubeMesh(pose, c, fxn, fyn, fzn, len, r, segs, square, alpha(fx.color, fade * 0.72f));
-        tubeMesh(pose, c, fxn, fyn, fzn, len, r * 0.45f, segs, square, alpha(fx.color2, fade));
-    }
-
-    private static boolean squareBeam(String s) {
-        if (s == null) return false;
-        return switch (s.toLowerCase()) {
-            case "box", "square", "cube", "rect", "prism" -> true;
-            default -> false;
+        float radius = Math.max(0.01f, fx.thickness * widthMul);
+        int color = op != null && op.color != 0 ? op.color : fx.color;
+        int core = op != null && op.coreColor != 0 ? op.coreColor
+            : op != null ? mix(color, 0xFFFFFFFF, 0.8f) | 0xFF000000 : mix(fx.color2, 0xFFFFFFFF, 0.5f);
+        String kind = op == null ? "beam" : op.op;
+        KfxBeams.Look look = switch (kind) {
+            // a ribbon waves, a trail thins out toward its end; both stay softer than a laser
+            case "ribbon" -> new KfxBeams.Look(KfxBeams.TUBE, color, core, radius, 0.3f, op.glow * 0.7f, 0.0f,
+                0.0f, op.noise > 0 ? op.noise : radius * 2.0f, op.speed, 12, false, false, seedBase(fx));
+            case "trail" -> new KfxBeams.Look(KfxBeams.TUBE, color, core, radius, 0.3f, op.glow * 0.6f, 0.0f,
+                op.taper > 0 ? op.taper : 0.85f, op.noise, op.speed, 12, false, false, seedBase(fx));
+            default -> op == null
+                ? new KfxBeams.Look(KfxBeams.TUBE, fx.color, core, radius, 0.4f, 1.0f, 0.12f, 0.0f, 0.0f, 1.0f,
+                    12, true, true, seedBase(fx))
+                : new KfxBeams.Look(KfxBeams.style(op.style), color, core, radius, op.core, op.glow, op.flicker,
+                    op.taper, op.noise, op.speed, op.segments, KfxBeams.capStart(op.caps), KfxBeams.capEnd(op.caps),
+                    seedBase(fx) + op.seed);
         };
+        KfxBeams.draw(pose, c, look, lx / len, ly / len, lz / len, len, age, fade, glowPass, camX, camY, camZ);
     }
 
     private static void drawRing(PoseStack.Pose pose, VertexConsumer c, KfxInstance fx, float spin, float pulse, float fade) {
@@ -256,8 +292,10 @@ public final class KfxRenderer {
 
     private static void drawEmitter(PoseStack.Pose pose, VertexConsumer c, KfxInstance fx, float age, float fade) {
         EmitterState st = EMITTERS.computeIfAbsent(fx.id, id -> new EmitterState(id));
-        st.tick(fx, age);
-        st.prune();
+        if (!glowPass) {
+            st.tick(fx, age);
+            st.prune();
+        }
         int style = styleCode(fx.particleStyle);
         for (Particle p : st.particles) {
             float t = p.age / Math.max(1.0f, p.life);
@@ -272,6 +310,28 @@ public final class KfxRenderer {
 
     private static void drawParticleStyle(PoseStack.Pose pose, VertexConsumer c, int style, Particle p, float size, int color) {
         boolean d3 = want3D();
+        if (glowPass) {
+            if (style == 0 || KfxMeshes.forStyle(style) != null) glowParticle(pose, c, style, p.x, p.y, p.z, size, color);
+            return;
+        }
+        if (d3 && style != STYLE_SPARK && KfxMeshes.forStyle(style) != null) {
+            meshParticle(pose, c, style, p.x, p.y, p.z, size, color, p.seed);
+            return;
+        }
+        if (d3 && style == STYLE_SPARK) {
+            // a spark with somewhere to go streaks along it; a still one is the needle mesh
+            float mx = p.x - p.px, my = p.y - p.py, mz = p.z - p.pz;
+            if (p.vx * p.vx + p.vy * p.vy + p.vz * p.vz + mx * mx + my * my + mz * mz > 1.0e-6f && p.age > 0) {
+                sparkParticle(pose, c, p, size, color);
+            } else {
+                meshParticle(pose, c, style, p.x, p.y, p.z, size, color, p.seed);
+            }
+            return;
+        }
+        if (d3 && style == 0) {
+            coreParticle(pose, c, p.x, p.y, p.z, size, color);
+            return;
+        }
         switch (style) {
             case STYLE_SPARK -> sparkParticle(pose, c, p, size, color);
             case STYLE_STAR -> { if (d3) starParticle(pose, c, p.x, p.y, p.z, size, color); else starFlat(pose, c, p.x, p.y, p.z, size, color); }
@@ -286,6 +346,112 @@ public final class KfxRenderer {
                 else spriteParticle(pose, c, p.x, p.y, p.z, size, color);
             }
         }
+    }
+
+    // halo radius and strength per style: sprites are mostly glow, needles and shards only a little
+    private static void glowParticle(PoseStack.Pose pose, VertexConsumer c, int style, float x, float y, float z,
+                                     float size, int color) {
+        float radius = size * (style == 0 ? 4.2f : style == STYLE_SPARK || style == STYLE_SHARD ? 2.4f : 3.2f);
+        float strength = style == 0 ? 0.85f : 0.5f;
+        KfxGlow.halo(pose, c, x, y, z, radius, alpha(glowTint(color), strength));
+        if (style == 0) KfxGlow.halo(pose, c, x, y, z, size * 1.1f, alpha(mix(color, 0xFFFFFFFF, 0.75f) | 0xFF000000,
+            ((color >>> 24) & 255) / 255.0f * 0.9f));
+    }
+
+    static int glowTint(int color) {
+        return (mix(color, 0xFFFFFFFF, 0.22f) & 0x00FFFFFF) | (color & 0xFF000000);
+    }
+
+    // a lit 3D particle: tumbling unit mesh, per-vertex key light + sky fill + a pale fresnel rim
+    static void meshParticle(PoseStack.Pose pose, VertexConsumer c, int style, float x, float y, float z,
+                                     float size, int color, float seed) {
+        float dx = camX - x, dy = camY - y, dz = camZ - z;
+        float dist2 = dx * dx + dy * dy + dz * dz;
+        // a sphere a few pixels wide reads the same as the 8-triangle gem
+        float[] mesh = KfxMeshes.forStyle(style == STYLE_ORB3D && size * size * 2.5e4f < dist2 ? STYLE_GEM : style);
+        if (mesh == null || mesh.length == 0) return;
+        int h = Float.floatToIntBits(seed * 0.61803398875f + 0.5f) * 0x9E3779B1;
+        float ax = hash01(h) * 2 - 1, ay = hash01(h * 0x85EBCA6B + 1) * 2 - 1, az = hash01(h * 0xC2B2AE35 + 2) * 2 - 1;
+        float al = (float)Math.sqrt(ax * ax + ay * ay + az * az);
+        if (al < 1.0e-3f) { ax = 0; ay = 1; az = 0; al = 1; }
+        ax /= al; ay /= al; az /= al;
+        float rate = (hash01(h * 0x27D4EB2F + 3) - 0.5f) * 0.12f;
+        float angle = hash01(h * 0x165667B1 + 4) * 6.2831855f + animTicks * rate;
+        float co = (float)Math.cos(angle), si = (float)Math.sin(angle), t = 1 - co;
+        float m00 = t * ax * ax + co, m01 = t * ax * ay - si * az, m02 = t * ax * az + si * ay;
+        float m10 = t * ax * ay + si * az, m11 = t * ay * ay + co, m12 = t * ay * az - si * ax;
+        float m20 = t * ax * az - si * ay, m21 = t * ay * az + si * ax, m22 = t * az * az + co;
+        float jitter = 0.88f + hash01(h * 0x2545F491 + 5) * 0.24f;
+        float br = ((color >> 16) & 255) * jitter, bg = ((color >> 8) & 255) * jitter, bb = (color & 255) * jitter;
+        int a = (color >>> 24) & 255;
+        int[] col = TRI_COL;
+        for (int i = 0; i < mesh.length; i += KfxMeshes.FLOATS_PER_VERTEX * 3) {
+            for (int k = 0; k < 3; k++) {
+                int o = i + k * KfxMeshes.FLOATS_PER_VERTEX;
+                float px = mesh[o], py = mesh[o + 1], pz = mesh[o + 2];
+                float nx = mesh[o + 3], ny = mesh[o + 4], nz = mesh[o + 5];
+                float wx = x + (m00 * px + m01 * py + m02 * pz) * size;
+                float wy = y + (m10 * px + m11 * py + m12 * pz) * size;
+                float wz = z + (m20 * px + m21 * py + m22 * pz) * size;
+                float rnx = m00 * nx + m01 * ny + m02 * nz, rny = m10 * nx + m11 * ny + m12 * nz, rnz = m20 * nx + m21 * ny + m22 * nz;
+                col[k] = litColor(br, bg, bb, a, rnx, rny, rnz, camX - wx, camY - wy, camZ - wz);
+                if (k == 0) { TRI[0] = wx; TRI[1] = wy; TRI[2] = wz; }
+                else if (k == 1) { TRI[3] = wx; TRI[4] = wy; TRI[5] = wz; }
+                else { TRI[6] = wx; TRI[7] = wy; TRI[8] = wz; }
+            }
+            litTri(pose, c, col);
+        }
+    }
+
+    private static final float[] TRI = new float[9];
+    private static final int[] TRI_COL = new int[3];
+
+    // shading shared in spirit with the Kender particle fragment shader
+    static int litColor(float r, float g, float b, int a, float nx, float ny, float nz, float vx, float vy, float vz) {
+        float vl = invLen(vx, vy, vz);
+        float key = Math.max(0.0f, nx * 0.3363f + ny * 0.9034f + nz * 0.2649f);
+        float lit = 0.58f + 0.3f * key + 0.17f * (0.5f + 0.5f * ny);
+        float ndv = Math.abs(nx * vx + ny * vy + nz * vz) * vl;
+        float fres = (1.0f - ndv) * (1.0f - ndv) * 0.85f;
+        int ir = Math.min(255, Math.round(r * lit + (r * 0.4f + 153.0f) * fres));
+        int ig = Math.min(255, Math.round(g * lit + (g * 0.4f + 153.0f) * fres));
+        int ib = Math.min(255, Math.round(b * lit + (b * 0.4f + 153.0f) * fres));
+        int ia = Math.min(255, Math.round(a * (0.82f + 0.18f * fres)));
+        return (ia << 24) | (ir << 16) | (ig << 8) | ib;
+    }
+
+    private static void litTri(PoseStack.Pose pose, VertexConsumer c, int[] col) {
+        vertex(pose, c, TRI[0], TRI[1], TRI[2], col[0], 0.5f, 0, 0, 1, 0);
+        vertex(pose, c, TRI[3], TRI[4], TRI[5], col[1], 0, 1, 0, 1, 0);
+        vertex(pose, c, TRI[6], TRI[7], TRI[8], col[2], 1, 1, 0, 1, 0);
+        vertex(pose, c, TRI[6], TRI[7], TRI[8], col[2], 1, 1, 0, 1, 0);
+    }
+
+    // the solid middle of a sprite: a small camera-facing disc, hotter than the halo around it
+    private static void coreParticle(PoseStack.Pose pose, VertexConsumer c, float x, float y, float z, float s, int color) {
+        int hot = (mix(color, 0xFFFFFFFF, 0.55f) & 0x00FFFFFF) | (color & 0xFF000000);
+        float r = s * 0.55f;
+        for (int i = 0; i < 8; i++) {
+            double a0 = Math.PI * 2 * i / 8, a1 = Math.PI * 2 * (i + 1) / 8;
+            float c0 = (float)Math.cos(a0) * r, s0 = (float)Math.sin(a0) * r, c1 = (float)Math.cos(a1) * r, s1 = (float)Math.sin(a1) * r;
+            vertex(pose, c, x, y, z, hot, 0.5f, 0, 0, 1, 0);
+            vertex(pose, c, x + KfxGlow.lx * c0 + KfxGlow.ux * s0, y + KfxGlow.ly * c0 + KfxGlow.uy * s0,
+                z + KfxGlow.lz * c0 + KfxGlow.uz * s0, hot, 0, 1, 0, 1, 0);
+            vertex(pose, c, x + KfxGlow.lx * c1 + KfxGlow.ux * s1, y + KfxGlow.ly * c1 + KfxGlow.uy * s1,
+                z + KfxGlow.lz * c1 + KfxGlow.uz * s1, hot, 1, 1, 0, 1, 0);
+            vertex(pose, c, x, y, z, hot, 0.5f, 0, 0, 1, 0);
+        }
+    }
+
+    // a small per-effect base: a float of the raw 63-bit id has no room left for "+ i * 31",
+    // so every particle of an effect used to share one seed, one tumble and one tint
+    private static float seedBase(KfxInstance fx) {
+        return (float)((fx.id ^ (fx.id >>> 21) ^ (fx.id >>> 42)) & 0x3FFF);
+    }
+
+    private static float hash01(int h) {
+        h ^= h >>> 16; h *= 0x7FEB352D; h ^= h >>> 15; h *= 0x846CA68B; h ^= h >>> 16;
+        return (h >>> 8) * (1.0f / 16777216.0f);
     }
 
     // CPU path defaults to cheap billboards; 3D mesh only when an op/effect explicitly asks "dim":"3d".
@@ -446,7 +612,7 @@ public final class KfxRenderer {
         // GPU path draws all native-batch particle ops via Kender instancing — skip the CPU draw entirely.
         // beam/ring_band are geometry, not in the particle batch, so they still draw here.
         boolean gpu = gpuOwnsNativeParticles();
-        boolean nativeParticles = gpu || drawNativeProgramParticles(pose, c, fx, age, fade);
+        boolean nativeParticles = (gpu && nativeReady(fx.id)) || drawNativeProgramParticles(pose, c, fx, age, fade);
         KfxDrawCtx ctx = new KfxDrawCtx(pose, c, fx, basis, age, spin, pulse, fade);
         for (KfxProgram.Op op : program.ops) {
             if (nativeParticles && KfxOps.nativeBatch(op.op)) continue;
@@ -499,7 +665,7 @@ public final class KfxRenderer {
             float x = (float)Math.cos(a) * (r + wobble) * appear;
             float z = (float)Math.sin(a) * (r + wobble) * appear;
             float y = (float)Math.sin(i * 0.61f + spin) * op.depth * appear;
-            particleAt(pose, c, style, basis, x, y, z, size * (0.7f + appear * 0.5f), color, fx.id + i * 31.0f + op.seed);
+            particleAt(pose, c, style, basis, x, y, z, size * (0.7f + appear * 0.5f), color, seedBase(fx) + i * 31.0f + op.seed);
         }
     }
 
@@ -531,7 +697,7 @@ public final class KfxRenderer {
                 int color = alpha(op.color != 0 ? op.color : fx.color2, fade * op.alpha);
                 particleAt(pose, c, style, basis, x, op.depth, z,
                     op.size > 0.0f ? op.size : Math.max(0.025f, fx.thickness * 0.32f),
-                    color, fx.id + drawn * 13.0f + op.seed);
+                    color, seedBase(fx) + drawn * 13.0f + op.seed);
             }
         }
     }
@@ -564,7 +730,7 @@ public final class KfxRenderer {
                 (float)Math.cos(a) * (r + wave),
                 op.depth * (progress - 0.5f),
                 (float)Math.sin(a) * (r + wave),
-                size, alpha(color, 1.0f - progress * 0.45f), fx.id + i * 17.0f + op.seed);
+                size, alpha(color, 1.0f - progress * 0.45f), seedBase(fx) + i * 17.0f + op.seed);
         }
     }
 
@@ -581,7 +747,7 @@ public final class KfxRenderer {
                 op.x + wob,
                 lerp(0.0f, 1.0f, t) * op.speed,
                 op.z + (float)Math.cos(i * 1.17f + op.seed) * op.wobble,
-                size * (1.0f - t * 0.35f), alpha(color, 1.0f - t * 0.6f), fx.id + i * 23.0f + op.seed);
+                size * (1.0f - t * 0.35f), alpha(color, 1.0f - t * 0.6f), seedBase(fx) + i * 23.0f + op.seed);
         }
     }
 
@@ -601,7 +767,7 @@ public final class KfxRenderer {
                 (float)Math.cos(a) * r,
                 (t - 0.5f) * height,
                 (float)Math.sin(a) * r,
-                size, alpha(color, 0.4f + 0.6f * progress), fx.id + i * 29.0f + op.seed);
+                size, alpha(color, 0.4f + 0.6f * progress), seedBase(fx) + i * 29.0f + op.seed);
         }
     }
 
@@ -617,7 +783,7 @@ public final class KfxRenderer {
         int visible = Math.max(1, Math.min(count, (int)(count * circleT)));
 
         particleAt(pose, c, fx.particleStyle, basis, 0, 0, 0,
-            dotSize * (1.2f + circleT * 0.8f), alpha(fx.color2, fade * (1.0f - circleT * 0.45f)), fx.id);
+            dotSize * (1.2f + circleT * 0.8f), alpha(fx.color2, fade * (1.0f - circleT * 0.45f)), seedBase(fx));
 
         for (int i = 0; i < visible; i++) {
             float lane = i / (float)count;
@@ -630,7 +796,7 @@ public final class KfxRenderer {
             float z = tz * appear;
             float y = (float)Math.sin(i * 0.61f + age * 0.08f) * fx.thickness * 0.35f * appear;
             int color = alpha(mix(fx.color2, fx.color, lane), fade * (0.28f + appear * 0.72f));
-            particleAt(pose, c, fx.particleStyle, basis, x, y, z, dotSize * (0.72f + appear * 0.58f), color, fx.id + i * 31.0f);
+            particleAt(pose, c, fx.particleStyle, basis, x, y, z, dotSize * (0.72f + appear * 0.58f), color, seedBase(fx) + i * 31.0f);
         }
 
         if (sigilT > 0.0f) {
@@ -650,7 +816,7 @@ public final class KfxRenderer {
         if (beamT > 0.0f) {
             drawBeam(pose, c, fx, pulse * (0.62f + beamT * 0.9f), fade * beamT);
             particleAt(pose, c, "orb3d", basis, 0, 0, 0, fx.thickness * (2.4f + beamT * 1.8f),
-                alpha(fx.color2, fade * (0.92f - beamT * 0.2f)), fx.id + age);
+                alpha(fx.color2, fade * (0.92f - beamT * 0.2f)), seedBase(fx) + age);
         }
     }
 
@@ -675,11 +841,11 @@ public final class KfxRenderer {
                 float z = lerp(p[line[0]][1], p[line[1]][1], t);
                 float s = Math.max(0.025f, fx.thickness * (0.22f + 0.20f * progress));
                 int color = alpha(fx.color2, fade * (0.32f + progress * 0.62f));
-                particleAt(pose, c, "star", basis, x, 0.018f, z, s, color, fx.id + drawn * 13.0f);
+                particleAt(pose, c, "star", basis, x, 0.018f, z, s, color, seedBase(fx) + drawn * 13.0f);
             }
         }
         particleAt(pose, c, "orb3d", basis, 0, 0.02f, 0, fx.thickness * (0.8f + progress * 0.9f),
-            alpha(fx.color2, fade * progress), fx.id + 7.0f);
+            alpha(fx.color2, fade * progress), seedBase(fx) + 7.0f);
     }
 
     private static KfxBasis ritualBasis(KfxInstance fx) {
@@ -865,35 +1031,10 @@ public final class KfxRenderer {
         }
     }
 
-    // oriented tube along (fxn,fyn,fzn)*len from local origin. segs=4+square = box laser, else round
-    private static void tubeMesh(PoseStack.Pose pose, VertexConsumer c,
-                                 float fxn, float fyn, float fzn, float len, float r, int segs, boolean square, int color) {
-        float ux = -fzn, uy = 0.0f, uz = fxn;
-        if (ux * ux + uy * uy + uz * uz < 1.0e-6f) { ux = 0.0f; uy = fzn; uz = -fyn; }
-        float ul = invLen(ux, uy, uz); ux *= ul; uy *= ul; uz *= ul;
-        float vx = fyn * uz - fzn * uy, vy = fzn * ux - fxn * uz, vz = fxn * uy - fyn * ux;
-        float vl = invLen(vx, vy, vz); vx *= vl; vy *= vl; vz *= vl;
-        float off = square ? 0.7853982f : 0.0f;
-        float tipx = fxn * len, tipy = fyn * len, tipz = fzn * len;
-        for (int i = 0; i < segs; i++) {
-            float a0 = off + (float)(Math.PI * 2.0 * i / segs);
-            float a1 = off + (float)(Math.PI * 2.0 * (i + 1) / segs);
-            float c0 = (float)Math.cos(a0), s0 = (float)Math.sin(a0);
-            float c1 = (float)Math.cos(a1), s1 = (float)Math.sin(a1);
-            float d0x = (ux * c0 + vx * s0) * r, d0y = (uy * c0 + vy * s0) * r, d0z = (uz * c0 + vz * s0) * r;
-            float d1x = (ux * c1 + vx * s1) * r, d1y = (uy * c1 + vy * s1) * r, d1z = (uz * c1 + vz * s1) * r;
-            int col = shade(color, d0x + d1x, d0y + d1y, d0z + d1z);
-            quad(pose, c,
-                d0x, d0y, d0z,
-                d1x, d1y, d1z,
-                tipx + d1x, tipy + d1y, tipz + d1z,
-                tipx + d0x, tipy + d0y, tipz + d0z, col);
-        }
-    }
-
     static void quad(PoseStack.Pose pose, VertexConsumer c,
                              float x0, float y0, float z0, float x1, float y1, float z1,
                              float x2, float y2, float z2, float x3, float y3, float z3, int color) {
+        if (glowPass) return;
         float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
         float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
         float nx = ay * bz - az * by;
@@ -910,6 +1051,7 @@ public final class KfxRenderer {
     static void tri(PoseStack.Pose pose, VertexConsumer c,
                             float x0, float y0, float z0, float x1, float y1, float z1,
                             float x2, float y2, float z2, int color) {
+        if (glowPass) return;
         float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
         float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
         float nx = ay * bz - az * by;

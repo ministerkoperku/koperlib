@@ -163,6 +163,7 @@ public final class KfxNativeProgram {
             JsonObject stage = raw.getAsJsonObject();
             String id = stage.has("node") ? stage.get("node").getAsString() : "stage_" + nodes.size();
             String op = stage.get("op").getAsString();
+            if (!com.koper.koper_lib.kfx.KfxOps.nativeBatch(op)) return;
             int count = stage.has("count") ? stage.get("count").getAsInt() : primitiveCost(stage);
             boolean decorative = KfxQualityPlan.decorative(stage);
             int argb = color(stage);
@@ -172,7 +173,7 @@ public final class KfxNativeProgram {
                 number(stage, "thickness", 0.1f), number(stage, "size", 0.05f),
                 number(stage, "alpha", 1), number(stage, "spin", 0),
                 number(stage, "wobble", 0), number(stage, "depth", 0),
-                number(stage, "speed", 0), number(stage, "style", 0),
+                number(stage, "speed", 0), style(stage),
                 ((argb >> 16) & 255) / 255.0f, ((argb >> 8) & 255) / 255.0f,
                 (argb & 255) / 255.0f, ((argb >>> 24) & 255) / 255.0f,
                 number(stage, "points", 5), number(stage, "skip", 2)
@@ -195,21 +196,26 @@ public final class KfxNativeProgram {
             JsonObject stage = raw.getAsJsonObject();
             String id = stage.has("node") ? stage.get("node").getAsString() : "stage_" + nodes.size();
             String op = stage.get("op").getAsString();
+            if (!com.koper.koper_lib.kfx.KfxOps.nativeBatch(op)) return;
             int count = stage.has("count") ? stage.get("count").getAsInt() : primitiveCost(stage);
             boolean decorative = KfxQualityPlan.decorative(stage);
+            // each node keeps its own authored colour; the instance colour is only the fallback
+            int argb = stage.has("color") ? color(stage) : fx.color;
             float[] properties = {
                 number(stage, "from", 0), number(stage, "to", fx.lifetime),
                 number(stage, "radius", fx.radius), number(stage, "radius_to", fx.radius),
                 number(stage, "thickness", fx.thickness), number(stage, "size", 0.05f),
                 number(stage, "alpha", 1), number(stage, "spin", 0),
                 number(stage, "wobble", 0), number(stage, "depth", 0),
-                number(stage, "speed", fx.speed), 0,
-                ((fx.color >> 16) & 255) / 255.0f, ((fx.color >> 8) & 255) / 255.0f,
-                (fx.color & 255) / 255.0f, ((fx.color >>> 24) & 255) / 255.0f,
+                number(stage, "speed", fx.speed), style(stage),
+                ((argb >> 16) & 255) / 255.0f, ((argb >> 8) & 255) / 255.0f,
+                (argb & 255) / 255.0f, ((argb >>> 24) & 255) / 255.0f,
                 number(stage, "points", 5), number(stage, "skip", 2)
             };
             nodes.add(new Node(fnv32(id), opcode(op), decorative, count, properties));
         });
+        // geometry-only effects (a lone beam) have nothing for the particle batch; KfxBackend keeps them java side
+        if (nodes.isEmpty()) throw new IllegalArgumentException("KFX program has no native particle nodes");
         JsonObject identity = root.deepCopy();
         identity.addProperty("cast_seed", 0L);
         long hash = fnv64(identity.toString());
@@ -227,6 +233,14 @@ public final class KfxNativeProgram {
         }
     }
 
+    // the graph writes the style by name; the native IR wants the code KfxStyles hands out
+    private static float style(JsonObject stage) {
+        if (!stage.has("style")) return com.koper.koper_lib.kfx.KfxStyles.codeFor("orb3d");
+        var raw = stage.get("style");
+        if (raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isNumber()) return raw.getAsFloat();
+        return com.koper.koper_lib.kfx.KfxStyles.codeFor(raw.getAsString());
+    }
+
     private static int color(JsonObject stage) {
         if (!stage.has("color")) return 0xFFFFFFFF;
         String raw = stage.get("color").getAsString().trim();
@@ -239,12 +253,10 @@ public final class KfxNativeProgram {
         try { return object.has(name) ? object.get(name).getAsFloat() : fallback; }
         catch (RuntimeException ignored) { return fallback; }
     }
+    // one table for every backend: a private copy here missed the sigil and the stream, so both
+    // collapsed into a single point
     private static int opcode(String op) {
-        return switch (op) {
-            case "ring_particles" -> 1; case "beam" -> 5; case "burst_ring" -> 6; case "spiral" -> 8;
-            case "ribbon" -> 9; case "trail" -> 10; case "mesh" -> 11; case "decal" -> 12;
-            case "light" -> 13; case "group" -> 14; default -> 4;
-        };
+        return com.koper.koper_lib.kfx.KfxOps.opcodeForName(op);
     }
     private static int primitiveCost(JsonObject stage) {
         String primitive = stage.has("primitive") ? stage.get("primitive").getAsString() : "particles";

@@ -62,9 +62,10 @@ final class KfxQualityWiringTest {
     void nativeProgramMarksGraphDeclaredDecorativeNodesWithoutNameGuessing() {
         KfxNativeProgram program = KfxNativeProgram.from(compiled());
 
-        assertEquals(3, program.nodes().size());
+        // the light node is not a particle and stays out of the native batch
+        assertEquals(2, program.nodes().size());
         assertEquals(1, program.nodes().stream().filter(node -> !node.decorative()).count());
-        assertEquals(2, program.nodes().stream().filter(KfxNativeProgram.Node::decorative).count());
+        assertEquals(1, program.nodes().stream().filter(KfxNativeProgram.Node::decorative).count());
     }
 
     @Test

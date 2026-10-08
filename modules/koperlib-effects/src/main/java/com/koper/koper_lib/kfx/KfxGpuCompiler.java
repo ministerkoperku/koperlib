@@ -16,6 +16,7 @@ public final class KfxGpuCompiler {
     public static float[] compile(KfxInstance fx) {
         if (fx.programJson == null || fx.programJson.isBlank()) return new float[0];
         KfxProgram program = KfxProgram.parse(fx.programJson);
+        program.ops.removeIf(op -> !KfxOps.nativeBatch(op.op));
         if (program.ops.isEmpty()) return new float[0];
         try {
             float[] out = new float[program.ops.size() * FLOATS_PER_OP];

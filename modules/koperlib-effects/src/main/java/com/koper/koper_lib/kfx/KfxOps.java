@@ -19,14 +19,16 @@ public final class KfxOps {
         builtin("pentagram_particles", 2, true, "pentagram", "star_polygon", "sigil", "polygon_star");
         builtin("ring_band", 3, false, "band", "circle_band");
         builtin("orb", 4, true, "point", "dot");
-        builtin("beam", 5, true, "laser", "ray");
+        // beam, ribbon, trail, mesh and decal are geometry, drawn java side on every backend; the native
+        // batch only knows particles and used to scatter them as dots along the line
+        builtin("beam", 5, false, "laser", "ray");
         builtin("burst_ring", 6, true, "ring_burst", "shockwave");
         builtin("stream", 7, true, "flow", "trail", "line_particles");
         builtin("spiral", 8, true, "helix", "vortex_line");
-        builtin("ribbon", 9, true);
-        builtin("trail", 10, true);
-        builtin("mesh", 11, true);
-        builtin("decal", 12, true);
+        builtin("ribbon", 9, false);
+        builtin("trail", 10, false);
+        builtin("mesh", 11, false);
+        builtin("decal", 12, false);
         builtin("light", 13, false);
         builtin("group", 14, false);
     }

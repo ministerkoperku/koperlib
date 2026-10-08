@@ -96,7 +96,12 @@ final class KfxNodeSchemas {
             optional("thickness", KfxResolvedValue.number(0.12)),
             optional("alpha", KfxResolvedValue.number(1.0)), optional("color", KfxResolvedValue.color(0xFFFFFFFF)),
             optional("material", KfxResolvedValue.text("koper_lib:additive")),
-            optional("style", KfxResolvedValue.text("tube")), optional("priority", KfxResolvedValue.text("core"))
+            optional("style", KfxResolvedValue.text("tube")), optional("priority", KfxResolvedValue.text("core")),
+            optional("core_color", KfxResolvedValue.color(0x00000000)), optional("core", KfxResolvedValue.number(0.4)),
+            optional("glow", KfxResolvedValue.number(1.0)), optional("flicker", KfxResolvedValue.number(0.12)),
+            optional("taper", KfxResolvedValue.number(0.0)), optional("noise", KfxResolvedValue.number(0.0)),
+            optional("speed", KfxResolvedValue.number(1.0)), optional("segments", KfxResolvedValue.integer(12)),
+            optional("caps", KfxResolvedValue.text("both"))
         )),
         Map.entry(RENDER_RIBBON, primitive(
             optional("thickness", KfxResolvedValue.number(0.16)), optional("points", KfxResolvedValue.integer(12)),

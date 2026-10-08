@@ -7,5 +7,6 @@ public final class KoperstuffClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         KoperDebugHud.register();
+        KfxPodglad.wlacz();
     }
 }
