@@ -128,8 +128,8 @@ Then in the addon build:
 ```groovy
 repositories { mavenLocal(); mavenCentral() }
 dependencies {
-    implementation "com.koper.koper_lib:koperlib-core:0.1.0-alpha"
-    implementation "com.koper.koper_lib:koperlib-fullpack:0.1.0-alpha"
+    implementation "com.koper.koper_lib:koperlib-core:0.1.1-alpha"
+    implementation "com.koper.koper_lib:koperlib-fullpack:0.1.1-alpha"
 }
 ```
 

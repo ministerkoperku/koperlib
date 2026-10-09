@@ -189,6 +189,15 @@ public class KoperPhys {
     public static long getWorldHandle(ServerLevel level) {
         return WORLD_HANDLES.computeIfAbsent(levelKey(level), k -> {
             long wh = KoperPhysBridge.createWorld();
+            if (wh > 0) {
+                var dim = com.koper.koper_lib.physics.dim.KhysDimensions.getFor(level.dimension().identifier().toString());
+                KoperPhysBridge.setGravity(wh, dim.gravity()[0], dim.gravity()[1], dim.gravity()[2]);
+                KoperPhysBridge.configureAtmosphere(wh,dim.universalDrag());
+                if (!KoperPhysBridge.configureFlight(wh, dim.flight().fastFlight(), (float)dim.flight().maxSpeed(), level.getMinY() >> 4, (level.getMaxY()-1) >> 4) && dim.flight().fastFlight()) {
+                    KoperPhysBridge.destroyWorld(wh);
+                    throw new IllegalStateException("fast flight requires a compatible Rapier native backend");
+                }
+            }
             if (wh <= 0) com.koper.koper_lib.coremod.KoperCore.LOGGER.error("[KoperPhys] createWorld() returned {} — Rust DLL missing koper_khysics_* exports! Run: cd engine && cargo build --release", wh);
             else         com.koper.koper_lib.coremod.KoperCore.LOGGER.info("[KoperPhys] physics world {} created for {}", wh, k);
             return wh;
@@ -214,6 +223,11 @@ public class KoperPhys {
 
     public static float[] getCachedPos(long id) { return CACHED_POS.get(id); }
     public static float[] getCachedRot(long id) { return CACHED_ROT.get(id); }
+    static void installFrozenPose(long id,float[] raw) {
+        CACHED_POS.put(id,new float[]{raw[0],raw[1],raw[2]});
+        CACHED_ROT.put(id,new float[]{raw[3],raw[4],raw[5],raw[6]});
+    }
+
 
     public static void suppressTerrainCollision(ServerLevel level, BlockPos pos) {
         com.koper.koper_lib.physics.terrain.TerrainSlurper.suppressBlockCollision(level, pos);
@@ -1443,6 +1457,10 @@ public class KoperPhys {
                     joint.anchorA()[0], joint.anchorA()[1], joint.anchorA()[2],
                     joint.anchorB()[0], joint.anchorB()[1], joint.anchorB()[2],
                     joint.axis()[0], joint.axis()[1], joint.axis()[2]);
+            if (id <= 0) {
+                for (long bodyId : ids) destroyKontraktion(level.getServer(),bodyId);
+                return null;
+            }
             if (id > 0 && Float.isFinite(joint.limitMin()) && Float.isFinite(joint.limitMax()))
                 setJointLimits(id, joint.limitMin(), joint.limitMax());
             if (id > 0 && joint.motorForce() > 0f)
@@ -1460,38 +1478,22 @@ public class KoperPhys {
     // alive before addons see the remap; only then are the old ids removed.
     public static AssemblyTransfer transferAssembly(long rootId, ServerLevel target,
                                                     float[] where, int yawQuarters) {
-        KontraEntry rootEntry = KONTRAS.get(rootId);
-        ServerLevel source = rootEntry == null ? null : levelFor(rootEntry);
-        if (source == null || target == null) return null;
-        List<Long> oldIds = assemblyOf(rootId);
-        AssemblySnap snap = captureAssembly(rootId);
-        float[] oldRootPos = CACHED_POS.get(rootId);
-        if (snap == null || oldRootPos == null) return null;
-        float[] destination = where != null && where.length >= 3
-            ? new float[]{where[0], where[1], where[2]}
-            : oldRootPos.clone();
-
-        List<float[]> velocities = new ArrayList<>(oldIds.size());
-        for (long oldId : oldIds) velocities.add(getKontraVelocity(oldId));
-        long[] newIds = spawnAssembly(target, snap, destination, yawQuarters);
-        if (newIds == null || newIds.length != oldIds.size()) return null;
-
-        Map<Long, Long> remap = new LinkedHashMap<>();
-        for (int i = 0; i < oldIds.size(); i++) {
-            remap.put(oldIds.get(i), newIds[i]);
-            float[] velocity = velocities.get(i);
-            KontraEntry spawned = KONTRAS.get(newIds[i]);
-            if (velocity != null && spawned != null)
-                KoperPhysBridge.setVelocity(spawned.worldHandle(), newIds[i],
-                    velocity[0] * 20f, velocity[1] * 20f, velocity[2] * 20f);
-        }
-        KoperPhysicsEvents.fireTransfer(Collections.unmodifiableMap(remap), source, target);
-        for (long oldId : oldIds) destroyKontraktion(source.getServer(), oldId);
-        return new AssemblyTransfer(Collections.unmodifiableMap(remap), newIds[0]);
+        return KontraTransfer.move(rootId,target,where,yawQuarters);
     }
 
     // one body straight from states + offsets at an exact pose. no world blocks are touched, which is
     // the whole point: block cells would round the poses and break the machine
+    private static boolean transferStaging;
+    static void beginTransferStaging() { transferStaging=true; }
+    static void endTransferStaging() { transferStaging=false; }
+    static void publishTransferBody(long id) {
+        var data=KONTRAS.get(id); var level=levelFor(data);
+        if(data==null || level==null) return;
+        var p=getCachedPos(id); var q=getCachedRot(id); var render=data.renderArrays();
+        KhysicsNetworking.broadcastSpawn(level,new KenderSpawnPayload(id,p.clone(),q.clone(),render.stateIds(),render.offsets(),render.locals(),blockEntityTags(data,level)));
+        KoperPhysicsEvents.fireSpawn(id,data);
+    }
+
     public static long spawnBody(ServerLevel level, List<BlockState> states, float[] offsets,
                                  float cx, float cy, float cz, float[] rot) {
         return spawnBody(level, states, offsets, new net.minecraft.nbt.CompoundTag[states.size()],
@@ -1596,10 +1598,7 @@ public class KoperPhys {
         bootstrapGrid(level, id, data);
         pushMaterials(id, data);
         pushAero(id, data);
-        var render = data.renderArrays();
-        KhysicsNetworking.broadcastSpawn(level, new KenderSpawnPayload(id, new float[]{cx, cy, cz},
-            rot.clone(), render.stateIds(), render.offsets(), render.locals(), blockEntityTags(data, level)));
-        KoperPhysicsEvents.fireSpawn(id, data);
+        if (!transferStaging) publishTransferBody(id);
         return id;
     }
 
@@ -1885,6 +1884,8 @@ public class KoperPhys {
     // spawn the official mount at LOCAL kontra coords (same space as KontraEntry.blockOffsets).
     // returns null if the kontra doesn't live here. addon then player.startRiding(seat, true)
     public static KontraSeat spawnSeat(ServerLevel level, long kontraId, float lx, float ly, float lz) {
+        KontraSeat staged = KontraTransfer.reusableSeat(level,kontraId,lx,ly,lz);
+        if (staged != null) return staged;
         KontraEntry data = KONTRAS.get(kontraId);
         if (data == null || !data.levelKey().equals(levelKey(level))) return null;
         float[] pos = CACHED_POS.get(kontraId);
@@ -1895,6 +1896,7 @@ public class KoperPhys {
         float[] w = localToWorld(lx, ly, lz, pos, rot);
         seat.setPos(w[0], w[1], w[2]);
         if (!level.addFreshEntity(seat)) return null;
+        com.koper.koper_lib.network.KontraMotionServer.track(seat);
         return seat;
     }
 
@@ -2076,8 +2078,13 @@ public class KoperPhys {
 
                 // escaped to NaN/inf or fell miles out of the world → it's lost. don't cache it (a broken
                 // pos feeds getEntities a NaN AABB and overflows MC's section longs → server crash); cull it.
+                ServerLevel policyLevel = handleLevels.get(wh);
+                var flight = policyLevel == null ? KontraFlightPolicy.DEFAULT
+                    : com.koper.koper_lib.physics.dim.KhysDimensions.getFor(
+                        policyLevel.dimension().identifier().toString()).flight();
                 if (!Float.isFinite(pos[0]) || !Float.isFinite(pos[1]) || !Float.isFinite(pos[2])
-                        || pos[1] < -2048f || pos[1] > 6000f) {
+                        || !Float.isFinite(rot[0]) || !Float.isFinite(rot[1]) || !Float.isFinite(rot[2]) || !Float.isFinite(rot[3])
+                        || pos[1] < flight.minBodyY() || pos[1] > flight.maxBodyY()) {
                     if (lost == null) lost = new ArrayList<>();
                     lost.add(id);
                     continue;
@@ -2088,7 +2095,7 @@ public class KoperPhys {
                 if (oldPos != null) {
                     double jx = pos[0] - oldPos[0], jy = pos[1] - oldPos[1], jz = pos[2] - oldPos[2];
                     double jump = Math.sqrt(jx * jx + jy * jy + jz * jz);
-                    if (jump > KONTRA_EMERGENCY_DELTA_BT) {
+                    if (!flight.fastFlight() && jump > KONTRA_EMERGENCY_DELTA_BT) {
                         com.koper.koper_lib.coremod.KoperCore.LOGGER.warn("[KoperPhys] kontra {} overspeed delta/tick={} - zeroing velocity", id, String.format("%.2f", jump));
                         KoperPhysBridge.setTransform(wh, id, pos[0], pos[1], pos[2], rot[0], rot[1], rot[2], rot[3]);
                         LAST_KONTRA_DELTA.put(id, new float[]{0f, 0f, 0f});
@@ -2704,7 +2711,9 @@ public class KoperPhys {
 
         float[] center = localToWorld(off[0], off[1], off[2], bodyPos, bodyRot);
         BlockPos projected = BlockPos.containing(center[0], center[1], center[2]);
-        if (!player.isWithinBlockInteractionRange(projected, 1.0)
+        double reach=player.blockInteractionRange()+1.0;
+        Vec3 eye=com.koper.koper_lib.network.KontraMotionServer.interactionEye(player);
+        if (new net.minecraft.world.phys.AABB(projected).distanceToSqr(eye)>reach*reach
                 || !level.mayInteract(player, projected)
                 || level.getServer().isUnderSpawnProtection(level, projected, player)) return null;
 
@@ -3305,6 +3314,7 @@ public class KoperPhys {
     }
 
     public static void destroyKontraktion(MinecraftServer server, long kontraId) {
+        if(KontraTransfer.recoveringBody(kontraId)) return;
         KenderSyncServer.cancelBody(server,kontraId);
         SELF_RIGHT_TICK.remove(kontraId);
         KONTRA_SLEEP_STATE.remove(kontraId);

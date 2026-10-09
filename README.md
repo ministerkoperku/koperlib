@@ -2,7 +2,7 @@
 
 KoperLib is a modular content engine for Minecraft Fabric. Fullpacks define items, blocks, mobs, recipes, menus, quests and dialogue in JSON. Lua and Java add behaviour. Separate modules provide binary models and animation, programmable effects, and moving block physics.
 
-**Status: alpha.** The first public release is `0.1.0-alpha`. Features work in the scenarios they were tested in, APIs can still change between versions, and the known gaps are listed below.
+**Status: alpha.** The first public release was `0.1.0-alpha`; the current one is the patch release `0.1.1-alpha`. Features work in the scenarios they were tested in, APIs can still change between versions, and the known gaps are listed below.
 
 ## Downloads
 

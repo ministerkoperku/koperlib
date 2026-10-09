@@ -196,14 +196,24 @@ public final class KenderTargeting {
         if (held.getItem().toString().contains("wand") || held.getItem().toString().contains("selection")) return;
 
         float vanillaDist = Float.MAX_VALUE;
-        if (mc.hitResult != null && mc.hitResult.getType() != HitResult.Type.MISS) {
+        Vec3 rideOffset=KontraRideClient.renderRideOffset(player,1);
+        Vec3 eye=player.getEyePosition().add(rideOffset);
+        if(rideOffset.lengthSqr()>1.0e-12) {
+            // Both static occlusion and hull selection must start in the rendered rider frame.
+            com.koper.koper_lib.physics.KoperPhys.CLIENT_BLOCK_LOOKUP_BYPASS.set(true);
+            try {
+                var real=player.level().clip(new net.minecraft.world.level.ClipContext(
+                    eye,eye.add(player.getLookAngle().scale(5.0)),net.minecraft.world.level.ClipContext.Block.OUTLINE,
+                    net.minecraft.world.level.ClipContext.Fluid.NONE,player));
+                if(real.getType()!=HitResult.Type.MISS) vanillaDist=(float)real.getLocation().distanceTo(eye);
+            } finally {com.koper.koper_lib.physics.KoperPhys.CLIENT_BLOCK_LOOKUP_BYPASS.set(false);}
+        } else if (mc.hitResult != null && mc.hitResult.getType() != HitResult.Type.MISS) {
             // if vanilla is already seeing a physics block (via ClientLevelAccessMixin),
             // don't use its distance as the OBB upper limit — otherwise OBB hits the same
             // block at the same distance and gets rejected (t >= vanillaDist - 0.05)
             boolean vanillaHitsPhysBlock = mc.hitResult instanceof BlockHitResult bhr
                 && (bhr.getBlockPos().equals(lastSetPos)
                     || KenderClientState.getClientBlockStateAt(bhr.getBlockPos()) != null);
-            Vec3 eye = player.getEyePosition();
             if (!vanillaHitsPhysBlock) {
                 Vec3 loc = mc.hitResult.getLocation();
                 double dx = loc.x - eye.x, dy = loc.y - eye.y, dz = loc.z - eye.z;
@@ -237,7 +247,6 @@ public final class KenderTargeting {
             }
         }
 
-        Vec3  eye  = player.getEyePosition();
         Vec3  look = player.getLookAngle();
         float best = Math.min(5.0f, vanillaDist - 0.05f);
         PhysHit bestHit = null;

@@ -16,6 +16,10 @@ public abstract class KontraPlayerRangeMixin {
         Player self = (Player)(Object)this;
         if (!(self.level() instanceof ServerLevel level)) return;
         BlockPos physical = KoperPhys.logicalToWorld(level, pos);
-        if (physical != null) cir.setReturnValue(self.isWithinBlockInteractionRange(physical, extraRange));
+        if (physical != null && self instanceof net.minecraft.server.level.ServerPlayer player) {
+            double range=self.blockInteractionRange()+extraRange;
+            cir.setReturnValue(new net.minecraft.world.phys.AABB(physical).distanceToSqr(
+                com.koper.koper_lib.network.KontraMotionServer.interactionEye(player))<=range*range);
+        } else if(physical!=null) cir.setReturnValue(self.isWithinBlockInteractionRange(physical, extraRange));
     }
 }

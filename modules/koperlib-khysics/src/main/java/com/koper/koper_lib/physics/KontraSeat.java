@@ -52,6 +52,7 @@ public class KontraSeat extends Entity {
     private int sneakHeld;
 
     public KontraSeat sneakToLeave(int holdTicks) { sneakOffTicks = Math.max(0, holdTicks); return this; }
+    public int sneakHoldTicks() { return sneakOffTicks; }
 
     // KontraSeatSneakMixin asks this instead of vanilla's "shift pressed = off"
     public boolean letsGoOf(net.minecraft.world.entity.player.Player player) {
@@ -100,6 +101,15 @@ public class KontraSeat extends Entity {
         }
         float[] w = rotate(entityData.get(LX), entityData.get(LY), entityData.get(LZ), rot);
         setPos(pos[0] + w[0], pos[1] + w[1], pos[2] + w[2]);
+    }
+
+    public void syncServerPose() {
+        if(level().isClientSide()) return;
+        float[] pos=KoperPhys.getCachedPos(kontraId()),rot=KoperPhys.getCachedRot(kontraId());
+        if(pos==null || rot==null) return;
+        float[] p=localPos(),w=rotate(p[0],p[1],p[2],rot);
+        setPos(pos[0]+w[0],pos[1]+w[1],pos[2]+w[2]);
+        for(var passenger:getPassengers()) positionRider(passenger);
     }
 
     // quat * v — tiny and local, the client has no KoperPhys math to borrow

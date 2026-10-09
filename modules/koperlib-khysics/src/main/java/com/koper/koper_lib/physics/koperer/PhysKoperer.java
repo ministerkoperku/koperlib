@@ -209,4 +209,8 @@ public interface PhysKoperer {
 
     // latest published KhysBodyState floats (KhysBodyState.LEN), null = engine keeps none
     default float[] bodyState(long worldId, long kontraId) { return null; }
+    default boolean configureAtmosphere(long worldId,float drag) { return false; }
+    default boolean configureFlight(long worldId, boolean enabled, float maxSpeed, int minSectionY, int maxSectionY) { return !enabled; }
+    default boolean setAngularVelocity(long worldId, long bodyId, float x, float y, float z) { return false; }
+    default boolean syncCommands(long worldId) { return false; }
 }

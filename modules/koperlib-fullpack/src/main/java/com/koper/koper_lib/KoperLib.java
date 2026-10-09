@@ -157,6 +157,9 @@ public class KoperLib implements ModInitializer {
 
         CreativeTabRegistry.processTabs(MOD_ID);
 
+        // startup tombstones are registered later, by FullpackTombstoneStartupMixin and on client start
+        com.koper.koper_lib.loader.FullpackTombstones.registerGuards();
+
         net.fabricmc.fabric.api.resource.ResourceManagerHelper.get(net.minecraft.server.packs.PackType.SERVER_DATA)
             .registerReloadListener(new net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener() {
                 @Override public Identifier getFabricId() { return Identifier.fromNamespaceAndPath(MOD_ID, "script_reloader"); }

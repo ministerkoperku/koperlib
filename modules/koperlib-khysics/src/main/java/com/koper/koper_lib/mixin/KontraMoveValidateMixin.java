@@ -12,6 +12,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 // riders are client-predicted now — the client carries itself along the kontra and the server's
 // re-simulation can lag the interpolated transform by a chunk of a tick. loosen the "moved wrongly"
@@ -21,6 +23,11 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 public abstract class KontraMoveValidateMixin {
 
     @Shadow public ServerPlayer player;
+    @Inject(method="handlePlayerPositionChange(DDDFFZZ)V",at=@At("HEAD"),cancellable=true)
+    private void koper$ignoreWorldPositionDuringRelativeRide(double x,double y,double z,float yaw,float pitch,
+                                                            boolean ground,boolean collision,CallbackInfo ci) {
+        if (com.koper.koper_lib.network.KontraMotionServer.managed(player)) ci.cancel();
+    }
 
     @ModifyConstant(method = "handlePlayerPositionChange(DDDFFZZ)V",
                     constant = @Constant(doubleValue = 0.0625D), require = 1)

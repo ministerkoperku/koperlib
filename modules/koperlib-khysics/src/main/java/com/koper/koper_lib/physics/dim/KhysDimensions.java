@@ -21,7 +21,10 @@ public final class KhysDimensions {
 
     private KhysDimensions() {}
 
-    public record DimPhysics(float[] gravity, float universalDrag) {
+    public record DimPhysics(float[] gravity, float universalDrag, com.koper.koper_lib.physics.KontraFlightPolicy flight) {
+        public DimPhysics(float[] gravity, float universalDrag) {
+            this(gravity, universalDrag, com.koper.koper_lib.physics.KontraFlightPolicy.DEFAULT);
+        }
         public static final DimPhysics DEFAULT = new DimPhysics(new float[]{0f, -28f, 0f}, 0.01f);
     }
 
@@ -69,7 +72,12 @@ public final class KhysDimensions {
                 }
             }
             float drag = getFloat(json, "universal_drag", DimPhysics.DEFAULT.universalDrag());
-            OVERRIDES.put(dim, new DimPhysics(gravity, drag));
+            if (!Float.isFinite(drag) || drag < 0 || !Float.isFinite(gravity[0])
+                    || !Float.isFinite(gravity[1]) || !Float.isFinite(gravity[2]))
+                throw new IllegalArgumentException("non-finite dimension physics");
+            var flight = com.koper.koper_lib.physics.KontraFlightPolicy.parse(
+                json.has("flight") ? json.getAsJsonObject("flight") : null);
+            OVERRIDES.put(dim, new DimPhysics(gravity, drag, flight));
         } catch (Exception e) {
             com.koper.koper_lib.coremod.KoperCore.LOGGER.warn("[KhysDimensions] Failed {}: {}", file.getFileName(), e.getMessage());
         }
@@ -88,6 +96,9 @@ public final class KhysDimensions {
             if (wh <= 0) continue;
             DimPhysics cfg = OVERRIDES.getOrDefault(dimId, DimPhysics.DEFAULT);
             KoperPhysBridge.setGravity(wh, cfg.gravity()[0], cfg.gravity()[1], cfg.gravity()[2]);
+            KoperPhysBridge.configureAtmosphere(wh,cfg.universalDrag());
+            if (!KoperPhysBridge.configureFlight(wh, cfg.flight().fastFlight(), (float)cfg.flight().maxSpeed(), level.getMinY() >> 4, (level.getMaxY()-1) >> 4) && cfg.flight().fastFlight())
+                throw new IllegalStateException("fast flight requires a compatible Rapier native backend");
         }
     }
 

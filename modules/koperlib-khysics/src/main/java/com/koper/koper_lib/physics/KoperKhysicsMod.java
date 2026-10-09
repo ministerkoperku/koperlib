@@ -42,6 +42,9 @@ public final class KoperKhysicsMod implements ModInitializer {
 
         ServerTickEvents.START_SERVER_TICK.register(server -> KoperPhys.tickPlayerKontraInteractions(server));
         ServerTickEvents.END_SERVER_TICK.register(KoperPhys::tickAll);
+        ServerTickEvents.END_SERVER_TICK.register(com.koper.koper_lib.network.KontraMotionServer::tick);
+        ServerTickEvents.END_SERVER_TICK.register(KontraTransfer::recover);
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> com.koper.koper_lib.network.KontraMotionServer.clear());
 
         AttackBlockCallback.EVENT.register((player, level, hand, pos, direction) -> {
             if (!(player.getItemInHand(hand).getItem() instanceof KhysSelectionWand))
@@ -84,6 +87,7 @@ public final class KoperKhysicsMod implements ModInitializer {
             playerDimensions.remove(handler.player.getUUID()));
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            KontraTransfer.clear(server);
             KontraWorldData.save(server);
             KontraWorldData.unload();
             KoperPhys.clearAll();

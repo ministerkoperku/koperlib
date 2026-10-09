@@ -41,6 +41,7 @@
     "KontraCreateValueSettingsServerMixin"
   ],
   "client": [
+    "KontraRelativePlayerMixin",
     "ClientBlockUpdateProbeMixin",
     "ClientKontraEffectsMixin",
     "ClientKontraLevelReaderMixin",

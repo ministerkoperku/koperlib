@@ -147,6 +147,10 @@ public final class KoperPhysBridge {
     public static void setVelocity(long worldId, long kontraId, float vx, float vy, float vz) { if (TRAIL) koperTrail(kontraId, "setVelocity" + java.util.Arrays.toString(new Object[]{vx, vy, vz})); of(worldId).setVelocity(worldId, kontraId, vx, vy, vz); }
 
     public static void setDamping(long worldId, long kontraId, float linear, float angular) { of(worldId).setDamping(worldId, kontraId, linear, angular); }
+    public static boolean configureAtmosphere(long worldId,float drag) {return of(worldId).configureAtmosphere(worldId,drag);}
+    public static boolean configureFlight(long worldId, boolean enabled, float maxSpeed, int minSectionY, int maxSectionY) { return of(worldId).configureFlight(worldId,enabled,maxSpeed,minSectionY,maxSectionY); }
+    public static boolean setAngularVelocity(long worldId, long bodyId, float x, float y, float z) { return of(worldId).setAngularVelocity(worldId,bodyId,x,y,z); }
+    public static boolean syncCommands(long worldId) { return of(worldId).syncCommands(worldId); }
 
     // ping the physics thread so it keeps stepping — call every server tick. no ping (game paused) → it
     // freezes, so contraptions don't drift around while you sit in the pause menu

@@ -438,6 +438,7 @@ public class CommandRegistry {
     public static void koperReloadCaches() {
         com.koper.koper_lib.api.FullpackAddons.prepareReload();
         try {
+        com.koper.koper_lib.loader.FullpackTombstones.beginLoad();
         com.koper.koper_lib.physics.weight.KhysWeightBook.loadAll();
         com.koper.koper_lib.physics.dim.KhysDimensions.loadAll();
         com.koper.koper_lib.scripting.JavaHookRegistry.clearAll();
@@ -462,6 +463,7 @@ public class CommandRegistry {
             com.koper.koper_lib.scripting.JavaHookRegistry.loadPackJava(packRoot, ns);
         });
         new UniversalLoader().loadExternalContent();
+        com.koper.koper_lib.loader.FullpackTombstones.finishLoad();
 
         CreativeTabRegistry.removeDisabledPackTabs();
         CreativeTabRegistry.processTabs(KoperLib.MOD_ID);

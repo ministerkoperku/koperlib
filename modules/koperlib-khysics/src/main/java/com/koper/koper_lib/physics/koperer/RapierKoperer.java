@@ -40,6 +40,29 @@ public final class RapierKoperer implements PhysKoperer {
 
     @Override
     public boolean isLoaded() { return NATIVE.loaded(); }
+    @Override public boolean syncCommands(long worldId) {
+        var h = fn("koper_khysics_sync_commands", FunctionDescriptor.of(JAVA_INT,JAVA_LONG,JAVA_INT));
+        if (h==null || worldId==0) return false;
+        try { return (int)h.invoke(worldId,250)==1; }
+        catch (Throwable e) {err("sync_commands",e);return false;}
+    }
+    @Override public boolean configureAtmosphere(long worldId,float drag) {
+        var h=fn("koper_khysics_set_atmosphere",FunctionDescriptor.ofVoid(JAVA_LONG,JAVA_FLOAT));
+        if(h==null || worldId==0) return false;
+        try {h.invoke(worldId,drag);return true;} catch(Throwable e) {err("set_atmosphere",e);return false;}
+    }
+    @Override public boolean configureFlight(long worldId, boolean enabled, float maxSpeed, int minSectionY, int maxSectionY) {
+        var h = fn("koper_khysics_set_flight_policy", FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_INT, JAVA_FLOAT, JAVA_INT, JAVA_INT));
+        if (h == null || worldId == 0) return false;
+        try { h.invoke(worldId, enabled ? 1 : 0, maxSpeed, minSectionY, maxSectionY); return true; }
+        catch (Throwable e) { err("set_flight_policy", e); return false; }
+    }
+    @Override public boolean setAngularVelocity(long worldId, long bodyId, float x, float y, float z) {
+        var h = fn("koper_khysics_set_angular_velocity", VOID_LONG_LONG_FFF);
+        if (h == null || worldId == 0) return false;
+        try { h.invoke(worldId,bodyId,x,y,z); return true; }
+        catch (Throwable e) { err("set_angular_velocity",e); return false; }
+    }
 
     // ── world lifecycle ───────────────────────────────────────────────────────
 

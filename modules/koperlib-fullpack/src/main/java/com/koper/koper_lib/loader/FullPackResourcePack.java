@@ -120,8 +120,9 @@ public class FullPackResourcePack implements PackResources {
                                     String prefix, String namespace, PackResources.ResourceOutput consumer) {
         Path dir = packRoot.resolve(legacyDir);
         if (!Files.isDirectory(dir)) return;
-        try {
-            Files.walk(dir).forEach(p -> {
+        if (!targetPrefix.startsWith(prefix) && !prefix.startsWith(targetPrefix)) return;
+        try (var walk = Files.walk(dir)) {
+            walk.forEach(p -> {
                 if (!Files.isRegularFile(p)) return;
                 String fileName = dir.relativize(p).toString().replace('\\', '/');
                 String mappedPath = targetPrefix + "/" + fileName;
@@ -148,8 +149,10 @@ public class FullPackResourcePack implements PackResources {
                                         PackResources.ResourceOutput consumer) {
         Path textures = packRoot.resolve("textures");
         if (!Files.isDirectory(textures)) return;
-        try {
-            Files.list(textures).filter(Files::isRegularFile).forEach(path -> {
+        if (!"textures/block/".startsWith(prefix) && !"textures/item/".startsWith(prefix)
+                && !prefix.startsWith("textures/block") && !prefix.startsWith("textures/item")) return;
+        try (var list = Files.list(textures)) {
+            list.filter(Files::isRegularFile).forEach(path -> {
                 String name = path.getFileName().toString();
                 for (String kind : java.util.List.of("block", "item")) {
                     String mapped = "textures/" + kind + "/" + name;
@@ -163,13 +166,38 @@ public class FullPackResourcePack implements PackResources {
         }
     }
 
+    // The files of scanDir whose path relative to baseDir starts with `prefix`, the same answer as
+    // walking all of scanDir and filtering, but only descending where a match is possible. Minecraft
+    // lists one folder at a time (every tag registry, functions, recipes, textures...), hundreds of
+    // calls per reload, and walking the whole tree for each of them made a reload with a few hundred
+    // MB of converted bedrock packs take 40 seconds.
+    static java.util.List<Path> matchingFiles(Path baseDir, Path scanDir, String prefix) throws IOException {
+        int cut = prefix.lastIndexOf('/');
+        // the last segment can be a partial name ("sounds" matches sounds.json too), so list its folder
+        Path folder = cut < 0 ? baseDir : baseDir.resolve(prefix.substring(0, cut));
+        String start = prefix.substring(cut + 1);
+        java.util.List<Path> out = new java.util.ArrayList<>();
+        if (!Files.isDirectory(folder)) return out;
+        try (var children = Files.list(folder)) {
+            for (Path child : (Iterable<Path>) children::iterator) {
+                if (!child.getFileName().toString().startsWith(start)) continue;
+                Path from = child.startsWith(scanDir) ? child : scanDir.startsWith(child) ? scanDir : null;
+                if (from == null) continue;
+                try (var walk = Files.walk(from)) {
+                    walk.filter(Files::isRegularFile)
+                        .filter(f -> baseDir.relativize(f).toString().replace('\\', '/').startsWith(prefix))
+                        .forEach(out::add);
+                }
+            }
+        }
+        return out;
+    }
+
     private void scanDirectory(Path baseDir, Path scanDir, String prefix,
                                String namespace, PackResources.ResourceOutput consumer) {
         try {
-            Files.walk(scanDir).forEach(p -> {
-                if (!Files.isRegularFile(p)) return;
+            matchingFiles(baseDir, scanDir, prefix).forEach(p -> {
                 String relative = baseDir.relativize(p).toString().replace('\\', '/');
-                if (!relative.startsWith(prefix)) return;
                 if (relative.endsWith(".png") && !isValidPng(p)) {
                     KoperLib.LOGGER.warn("Skipping corrupt PNG in findResources: {}", p);
                     return;

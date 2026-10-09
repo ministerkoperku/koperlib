@@ -72,7 +72,7 @@ Modules publish independently to Maven Local:
 ./gradlew publishToMavenLocal
 ```
 
-Use the coordinate of the module the addon actually needs, such as `com.koper.koper_lib:koperlib-fullpack:0.1.0-alpha`. See [Java addons](JAVA_ADDONS.md). Kopermod currently consumes local module jars directly; build KoperLib and Koper Mana Lib before building it.
+Use the coordinate of the module the addon actually needs, such as `com.koper.koper_lib:koperlib-fullpack:0.1.1-alpha`. See [Java addons](JAVA_ADDONS.md). Kopermod currently consumes local module jars directly; build KoperLib and Koper Mana Lib before building it.
 
 ## Verification
 

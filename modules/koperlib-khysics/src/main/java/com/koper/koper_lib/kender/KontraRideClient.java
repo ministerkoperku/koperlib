@@ -97,6 +97,9 @@ public final class KontraRideClient {
         // the glue needs to know who's local and where the kontras are (PACKET pose,
         // same one the solve collides against — render lerp lies mid-tick)
         KontraGlue.CLIENT_LOCAL = ent -> ent instanceof LocalPlayer lp && lp == Minecraft.getInstance().player;
+        KontraGlue.CLIENT_FAST = KontraMotionClient::fast;
+        KontraGlue.CLIENT_DEPARTURE = KontraMotionClient::departure;
+        KontraGlue.CLIENT_VACUUM = KontraMotionClient::vacuum;
         KontraGlue.CLIENT_POSE = id -> {
             KenderClientState.KontraRenderData k = KenderClientState.getById(id);
             if (k == null || k.currPos == null || k.currRot == null)
@@ -119,7 +122,7 @@ public final class KontraRideClient {
                 }
             };
         // packet poses go live at tick start, in phase with the player's own lerp
-        ClientTickEvents.START_CLIENT_TICK.register(mc -> KenderClientState.latchTick());
+        ClientTickEvents.START_CLIENT_TICK.register(mc -> { KenderClientState.latchTick(); KontraMotionClient.applyPending(); });
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
             tickCameraKey(mc);
             tickDebugHud(mc);
@@ -131,6 +134,7 @@ public final class KontraRideClient {
     }
 
     public static void clear() {
+        KontraMotionClient.clear();
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null)
             KontraGlue.release(mc.player, KontraGlue.mind(mc.player), "clear-all", false);
@@ -185,6 +189,25 @@ public final class KontraRideClient {
     // out of step (koper: "the player flies off the chair for under a second"). so the rider is
     // drawn where kender draws the seat THIS frame
     public static Vec3 renderRideOffset(Entity entity, float tickDelta) {
+        if (entity instanceof LocalPlayer player && KontraMotionClient.managed(player)) {
+            var k = KenderClientState.getById(KontraGlue.mind(player).deckId);
+            if (k != null && k.prevPos != null && k.prevRot != null) {
+                float[] p = KenderClientState.renderPos(k, System.nanoTime());
+                float[] q = KenderClientState.renderRot(k, System.nanoTime());
+                if (p != null && q != null) {
+                    var previous = new com.koper.koper_lib.physics.KontraFrame(new Vec3(k.prevPos[0],k.prevPos[1],k.prevPos[2]),
+                        new org.joml.Quaterniond(k.prevRot[0],k.prevRot[1],k.prevRot[2],k.prevRot[3]),Vec3.ZERO,Vec3.ZERO,Vec3.ZERO,0);
+                    var current = new com.koper.koper_lib.physics.KontraFrame(new Vec3(k.currPos[0],k.currPos[1],k.currPos[2]),
+                        new org.joml.Quaterniond(k.currRot[0],k.currRot[1],k.currRot[2],k.currRot[3]),Vec3.ZERO,Vec3.ZERO,Vec3.ZERO,0);
+                    Vec3 local = previous.toLocal(new Vec3(entity.xo,entity.yo,entity.zo)).lerp(current.toLocal(entity.position()),tickDelta);
+                    var rendered = new com.koper.koper_lib.physics.KontraFrame(new Vec3(p[0],p[1],p[2]),
+                        new org.joml.Quaterniond(q[0],q[1],q[2],q[3]),Vec3.ZERO,Vec3.ZERO,Vec3.ZERO,0);
+                    Vec3 vanilla = new Vec3(net.minecraft.util.Mth.lerp(tickDelta,entity.xo,entity.getX()),
+                        net.minecraft.util.Mth.lerp(tickDelta,entity.yo,entity.getY()),net.minecraft.util.Mth.lerp(tickDelta,entity.zo,entity.getZ()));
+                    return rendered.toWorld(local).subtract(vanilla);
+                }
+            }
+        }
         if (!(entity.getVehicle() instanceof com.koper.koper_lib.physics.KontraSeat seat)) return Vec3.ZERO;
         KenderClientState.KontraRenderData k = KenderClientState.getById(seat.kontraId());
         if (k == null) return Vec3.ZERO;
@@ -203,7 +226,7 @@ public final class KontraRideClient {
         double riderZ = net.minecraft.util.Mth.lerp(tickDelta, entity.zo, entity.getZ());
         Vec3 off = new Vec3(p[0] + w.x + attach.x - riderX, p[1] + w.y + attach.y - riderY, p[2] + w.z + attach.z - riderZ);
         // a pose from another world or a teleport is not a lag to hide
-        return off.lengthSqr() > 16.0 ? Vec3.ZERO : off;
+        return com.koper.koper_lib.physics.KontraFrame.finite(off) ? off : Vec3.ZERO;
     }
 
     public static double renderRideCameraDistance(Entity entity) {
@@ -301,7 +324,11 @@ public final class KontraRideClient {
         AABB box = entity.getBoundingBox();
         double ex = (box.minX + box.maxX) * 0.5, ey = (box.minY + box.maxY) * 0.5, ez = (box.minZ + box.maxZ) * 0.5;
         double ehx = (box.maxX - box.minX) * 0.5, ehy = (box.maxY - box.minY) * 0.5, ehz = (box.maxZ - box.minZ) * 0.5;
-        double cullR = Math.max(ehx, Math.max(ehy, ehz)) + 1.5 + worldDelta.length();
+        var carryMind=KontraGlue.mind(entity);
+        Vec3 carry=carryMind.fedCarry && KontraGlue.fastCarry(entity)?new Vec3(carryMind.fedX,carryMind.fedY,carryMind.fedZ):Vec3.ZERO;
+        ex+=carry.x; ey+=carry.y; ez+=carry.z;
+        double ownLength=worldDelta.subtract(carry).length();
+        double cullR = Math.max(ehx, Math.max(ehy, ehz)) + 1.5 + ownLength;
         double cullSq = (cullR + 1.0) * (cullR + 1.0);
 
         List<KontraRide.KItem> ks = new ArrayList<>();
@@ -319,7 +346,7 @@ public final class KontraRideClient {
                 continue;
             double dx = ex - pos[0], dy = ey - pos[1], dz = ez - pos[2];
             double kr = Math.sqrt(k.obbHalfX * k.obbHalfX + k.obbHalfY * k.obbHalfY + k.obbHalfZ * k.obbHalfZ);
-            double reach = kr + 2.0 + worldDelta.length();
+            double reach = kr + 2.0 + ownLength;
             if (dx * dx + dy * dy + dz * dz > reach * reach)
                 continue;
             double[] le = invRot(ex - pos[0], ey - pos[1], ez - pos[2], rot);

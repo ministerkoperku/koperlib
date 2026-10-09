@@ -94,7 +94,17 @@ public abstract class KontraCollideRedirectMixin implements KontraGlue.MindHaver
         Vec3 afterVanilla;
         KoperPhys.ENTITY_COLLISION_ACTIVE.set(true);
         try {
-            afterVanilla = this.collide(solved);
+            var mind = KontraGlue.mind(self);
+            if (mind.fedCarry && KontraGlue.fastCarry(self)) {
+                Vec3 carry = new Vec3(mind.fedX, mind.fedY, mind.fedZ);
+                Vec3 before = self.position();
+                try {
+                    self.setPos(before.add(carry));
+                    afterVanilla = this.collide(solved.subtract(carry)).add(carry);
+                } finally {
+                    self.setPos(before);
+                }
+            } else afterVanilla = this.collide(solved);
         } finally {
             KoperPhys.ENTITY_COLLISION_ACTIVE.set(false);
         }

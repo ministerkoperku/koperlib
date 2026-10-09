@@ -24,6 +24,12 @@ public class KoperLibClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         com.koper.koper_lib.kui.KuiThemes.init();
+        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STARTED.register(client ->
+            com.koper.koper_lib.loader.FullpackTombstones.registerStartupTombstones());
+        net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback.EVENT.register((stack, context, flag, lines) -> {
+            if (com.koper.koper_lib.loader.FullpackTombstones.isMissing(stack.getItem()))
+                lines.add(Component.literal("§cIts Fullpack is not loaded. It comes back when the pack does."));
+        });
         net.fabricmc.loader.api.FabricLoader.getInstance()
             .getEntrypoints("koperlib-fullpack-client-addon", Runnable.class)
             .forEach(Runnable::run);

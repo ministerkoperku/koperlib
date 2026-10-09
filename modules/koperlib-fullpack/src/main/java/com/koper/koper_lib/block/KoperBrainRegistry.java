@@ -44,6 +44,7 @@ public final class KoperBrainRegistry {
         if (block == null) return;
         VALID.add(block);
         SLOTS.put(block, Math.max(0, slotCount));
+        com.koper.koper_lib.loader.FullpackTombstones.noteBrain(block, Math.max(0, slotCount));
         // the live-set-by-reference trick above is not enough on its own: fabric's addValidBlock swaps
         // the type's set for its own copy, and from then on TYPE.isValid never saw a block bound
         // afterwards. every pack machine placed like that got no block entity, no inventory and no

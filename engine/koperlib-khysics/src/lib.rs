@@ -139,7 +139,14 @@ pub extern "C" fn koper_khysics_create_world() -> i64 {
                         let mut q = match cq2.lock() { Ok(q) => q, Err(_) => return };
                         std::mem::take(&mut *q)
                     };
-                    for cmd in cmds { world.process_cmd(cmd); }
+                    for cmd in cmds {
+                        if let PhysicsCmd::Fence(reply)=cmd {
+                            if let Ok(mut snapshot)=sn2.write() {
+                                *snapshot=world.build_snapshot();
+                                let _=reply.send(WorldSnapshot::default());
+                            }
+                        } else {world.process_cmd(cmd);}
+                    }
 
                     let new_frags = world.step(1.0 / 60.0);
                     if !new_frags.is_empty() {
@@ -930,3 +937,49 @@ pub extern "C" fn asinf(x: f32) -> f32 { (x as f64).asin() as f32 }
 
 #[no_mangle]
 pub extern "C" fn atan2f(y: f32, x: f32) -> f32 { (y as f64).atan2(x as f64) as f32 }
+
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_angular_velocity(world_id:i64,id:i64,x:f32,y:f32,z:f32) {
+    push_cmd(world_id,PhysicsCmd::SetAngularVelocity{id,v:[x,y,z]});
+}
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_atmosphere(world_id:i64,drag:f32) {
+    push_cmd(world_id,PhysicsCmd::SetAtmosphere{drag});
+}
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_flight_policy(world_id:i64,enabled:i32,max_speed:f32,min_section_y:i32,max_section_y:i32) {
+    push_cmd(world_id,PhysicsCmd::SetFlightPolicy{enabled:enabled!=0,max_speed,min_section_y,max_section_y});
+}
+
+#[cfg(test)]
+mod transfer_fence_tests {
+    use super::*;
+    #[test] fn command_fence_publishes_exact_velocity_before_transfer() {
+        let w=koper_khysics_create_world(); let offset=[0.0f32;3]; let mass=[1.0f32];
+        let id=koper_khysics_spawn_kontraktion_offsets(w,offset.as_ptr(),mass.as_ptr(),1,0,0.0,100.0,0.0);
+        koper_khysics_set_gravity(w,0.0,0.0,0.0);
+        koper_khysics_set_damping(w,id,0.0,0.0);
+        koper_khysics_set_velocity(w,id,123.0,0.0,0.0);
+        koper_khysics_set_angular_velocity(w,id,0.0,2.0,0.0);
+        assert_eq!(koper_khysics_sync_commands(w,250),1);
+        let mut out=[0.0f32;world::BODY_STATE_LEN];
+        assert_eq!(koper_khysics_body_state(w,id,out.as_mut_ptr(),out.len() as i32),out.len() as i32);
+        assert_eq!(out[7],123.0);assert_eq!(out[11],2.0);
+        koper_khysics_destroy_world(w);
+        assert_eq!(koper_khysics_sync_commands(w,20),0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn koper_khysics_sync_commands(world_id:i64,timeout_ms:i32) -> i32 {
+    let (reply,receiver)=std::sync::mpsc::channel();
+    {
+        let Ok(map)=worlds().lock() else {return 0};
+        let Some(entry)=map.get(&world_id) else {return 0};
+        entry.heartbeat.store(now_millis(),Ordering::Relaxed);
+        let Ok(mut queue)=entry.cmd_queue.lock() else {return 0};
+        queue.push(PhysicsCmd::Fence(reply));
+    }
+    if receiver.recv_timeout(Duration::from_millis(timeout_ms.clamp(1,1000) as u64)).is_ok() {return 1;}
+    0
+}

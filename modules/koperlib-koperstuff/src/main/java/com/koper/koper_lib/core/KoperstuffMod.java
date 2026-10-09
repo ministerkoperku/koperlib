@@ -15,5 +15,6 @@ public final class KoperstuffMod implements ModInitializer {
         KoperModules.register("koperstuff", version, KoperModules.Environment.COMMON,
             "stress", "debug", "diagnostics");
         com.koper.koper_lib.loader.CommandRegistry.register();
+        KoperFastFlightProbe.register();
     }
 }

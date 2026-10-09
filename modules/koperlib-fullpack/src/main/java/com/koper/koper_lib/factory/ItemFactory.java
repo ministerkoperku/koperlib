@@ -71,6 +71,7 @@ public class ItemFactory {
         boolean alreadyRegistered = net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id);
 
         if (alreadyRegistered) {
+            if (!com.koper.koper_lib.loader.FullpackTombstones.claimItem(id)) return;
             String tex = (merged.texture != null && !merged.texture.isEmpty()) ? merged.texture
                     : vanillaFallbackTexture(merged.type != null ? merged.type.toLowerCase() : "");
 			emitItemModel(id, tex, modelTypeFor(merged.type, id.getPath()), merged.textureInHand, geoIcon(merged), merged.tint, merged.dyeable, merged);
@@ -537,6 +538,7 @@ public class ItemFactory {
 
         if (!alreadyRegistered) {
             ContentRegistry.registerItem(merged.id, customItem, merged.creativeTab);
+            com.koper.koper_lib.loader.FullpackTombstones.noteFactoryItem(id, customItem);
             KoperLib.LOGGER.info("ItemFactory: Registered item: " + merged.id + " (" + merged.type + ")");
         }
         // store for KoperItemRef API — always update so reload picks up changed json

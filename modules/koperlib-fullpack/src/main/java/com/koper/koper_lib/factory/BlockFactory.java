@@ -61,6 +61,7 @@ public class BlockFactory {
 
         
         if (alreadyRegistered) {
+            if (!com.koper.koper_lib.loader.FullpackTombstones.claimBlock(id)) return;
             refreshAssets(id, merged, json);
             // reload wiped the brain bindings but the Block object survives — hook it back up,
             // otherwise every placed machine loses its block entity until the game restarts
@@ -309,6 +310,7 @@ public class BlockFactory {
 
         if (!alreadyRegistered) {
             ContentRegistry.registerBlock(merged.id, customBlock, merged.creativeTab);
+            com.koper.koper_lib.loader.FullpackTombstones.noteFactoryBlock(id, customBlock);
         }
         ContentRegistry.storeBlockData(merged.id, merged);
 
@@ -414,6 +416,8 @@ public class BlockFactory {
     // true = lua/scripts may run (hook returned PASS)
     private static boolean fireBlockHook(String blockId, String event, Player player, BlockPos pos) {
         if (blockId == null || blockId.isEmpty()) return true;
+        // the pack is gone; its scripts and json events must not keep running off a tombstone
+        if (com.koper.koper_lib.loader.FullpackTombstones.isMissingBlockId(blockId)) return false;
         return JavaHookRegistry.fireHook(
             blockId + "/" + event,
             KoperContext.ofBlockUse(player, pos)
@@ -422,6 +426,7 @@ public class BlockFactory {
 
     private static boolean openKui(KoperBlockData data, Level level, BlockPos pos, Player player) {
         if (!hasKui(data) || !(player instanceof net.minecraft.server.level.ServerPlayer sp)) return false;
+        if (com.koper.koper_lib.loader.FullpackTombstones.isMissingBlockId(data.id)) return false;
         String key = blockContainerKey(data, level, pos);
         if (key != null) {
             upgradeVaultContainer(data, level, pos, key);

@@ -190,7 +190,9 @@ public final class KoperPhysicsEvents {
                                     net.minecraft.server.level.ServerLevel from,
                                     net.minecraft.server.level.ServerLevel to) {
         for (var l : ON_TRANSFER) {
-            try { l.onTransfer(bodies, from, to); } catch (Throwable ignored) {}
+            try { l.onTransfer(bodies, from, to); } catch (Throwable error) {
+                com.koper.koper_lib.coremod.KoperCore.LOGGER.error("[Khysics] assembly transferred but an addon remap failed: {}", bodies, error);
+            }
         }
     }
 }

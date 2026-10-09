@@ -109,11 +109,22 @@ The remaining sections cover content types and runtime behavior.
 
 That last one is unusual and worth explaining, because most mods cannot do it. Minecraft freezes its registries after startup. KoperLib keeps them writable with a mixin that cancels the frozen check, and restores the intrusive holder cache that `freeze()` wipes, so `Registry.register` keeps working all session. That is why editing a pack feels like editing a config file.
 
-**There is exactly one thing reload cannot do: fully unregister content.**
+**Removing content keeps its id: it becomes missing content.**
 
-If an item is deleted from a pack, or disable a pack that added blocks, the definitions stop being applied but the registry entries stay behind until the game restarts. Nothing breaks. The old ids stay visible in commands and creative search until next launch. The machinery to physically remove a registry entry exists and is already used for creative tabs, it is simply not wired for content yet.
+A registry entry is never taken out. Removing one would shift numeric ids under connected clients and turn every placed copy of a block into air. When an item or block is deleted from a pack, or its pack is disabled, the id stays and its behaviour is replaced:
 
-That is the whole list. Adding is live, editing is live, removing waits for a restart.
+* The name reads `Missing: pack:id` and the model is the missing model. Items carry a tooltip saying their Fullpack is not loaded.
+* Missing items cannot be used and missing blocks cannot be placed. Scripts, JSON events and menus of the removed pack no longer run.
+* Missing items appear only in the creative tab *Missing content*. `/give pack:id` still works and gives the missing item.
+* A placed block keeps its block state and its block entity data, including `koper.bstate` state and inventories.
+* Breaking a placed missing block drops the block itself plus the items stored in its block entity. Hardness is unchanged, so a block that could not be broken before still cannot be broken.
+* Stacks in inventories and containers stay the same item with the same components.
+
+When the pack comes back, the content works again as before. Only content built from pack JSON is covered. Blocks and items a Java mod registers itself are left alone.
+
+This also works across restarts. Every id a pack has registered is recorded, with its block state properties, in `koperlib/registry_manifest.json`. When a world loads and a recorded id is not provided by any pack, KoperLib registers a placeholder under that id, so placed blocks and stored stacks load instead of disappearing. If the pack returns while the game is running, its content stays missing until the next restart, and the log says so. Deleting the manifest removes this protection for content of packs that are already gone.
+
+Entities are not covered yet. On a dedicated server, a client that never had the removed pack has no placeholder for its ids, so registry sync refuses the connection; the client needs the same `registry_manifest.json` entries.
 
 The one thing outside content: swapping the native engine binary needs a restart, because a loaded native library cannot be unloaded. That only matters when building KoperLib from source.
 
@@ -888,6 +899,8 @@ Example `fullpack.json`:
 The old combined `config/koperlib/config.json` is a migration input, not the current settings file. Unknown fields are ignored. Development-only automatic script reload adds work to each invocation.
 
 ## Physics (khysics)
+
+Dimension flight policy, bounded collision readiness and occupied assembly transfer are documented in [Khysics](KHYSICS.md#dimensions-and-gravity). Fast flight is opt-in and requires matching native libraries.
 
 Full reference: **[KHYSICS.md](KHYSICS.md)**
 

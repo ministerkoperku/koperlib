@@ -40,6 +40,12 @@ public final class KontraGlue {
     // "is this THE local player" — inherited on the client is local-player-only,
     // everything else is server-synced anyway
     public static volatile Predicate<Entity> CLIENT_LOCAL = null;
+    public static volatile Predicate<Entity> CLIENT_FAST = e -> false;
+    public static volatile java.util.function.BiFunction<Entity,Vec3,Vec3> CLIENT_DEPARTURE = (e,at) -> null;
+    public static boolean fastCarry(Entity e) {
+        return e.level().isClientSide()?CLIENT_FAST.test(e):com.koper.koper_lib.physics.dim.KhysDimensions.getFor(e.level().dimension().identifier().toString()).flight().fastFlight();
+    }
+    public static volatile Predicate<Entity> CLIENT_VACUUM = e -> false;
 
     // how long tracking survives with no support (jump arc ≈ 12 ticks)
     private static final int LOST_GRACE_TICKS = 40;
@@ -107,7 +113,7 @@ public final class KontraGlue {
             m.basePos[0] = pose[0]; m.basePos[1] = pose[1]; m.basePos[2] = pose[2];
             m.baseRot[0] = pose[3]; m.baseRot[1] = pose[4]; m.baseRot[2] = pose[5]; m.baseRot[3] = pose[6];
             double sq = ix * ix + iy * iy + iz * iz;
-            if (sq > MAX_INHERITED_SQ) {
+            if (!Double.isFinite(sq) || (sq > MAX_INHERITED_SQ && !fastCarry(self))) {
                 release(self, m, "carry-far", false);
                 zeroGhost(m);
                 return delta;
@@ -146,7 +152,9 @@ public final class KontraGlue {
         if (self.isInWater()) {
             m.ghostX *= 0.9; m.ghostY *= 0.9; m.ghostZ *= 0.9;
         }
-        m.ghostX *= 0.99; m.ghostY *= 0.99; m.ghostZ *= 0.99;
+        boolean vacuum = self.level().isClientSide() ? CLIENT_VACUUM.test(self)
+            : com.koper.koper_lib.physics.dim.KhysDimensions.getFor(self.level().dimension().identifier().toString()).flight().vacuumMomentum();
+        if (!vacuum) { m.ghostX *= 0.99; m.ghostY *= 0.99; m.ghostZ *= 0.99; }
         if (Math.abs(m.ghostY) < 0.01) m.ghostY = 0.0;
     }
 
@@ -156,6 +164,7 @@ public final class KontraGlue {
 
     // tracking transitions, right after the solve + vanilla collide ran
     public static void afterMove(Entity self, KontraRide.Ride r, Vec3 solved, Vec3 afterVanilla) {
+        Vec3 at=afterVanilla!=null?self.position().add(afterVanilla):self.position();
         Mind m = mind(self);
         boolean grounded = r != null && r.onGround && r.kontraId != 0L;
         if (grounded) {
@@ -173,6 +182,7 @@ public final class KontraGlue {
             m.deckRot = r.obbRot != null ? r.obbRot.clone() : m.deckRot;
             m.lostTicks = 0;
             m.lastRideNanos = System.nanoTime();
+            com.koper.koper_lib.network.KontraMotionServer.track(self);
             return;
         }
         if (m.deckId == 0L) return;
@@ -180,26 +190,33 @@ public final class KontraGlue {
         // vanilla floor caught a fall the solve let through = we stand on the WORLD now
         if (solved != null && afterVanilla != null
                 && solved.y < -1.0e-7 && afterVanilla.y - solved.y > 1.0e-7) {
-            release(self, m, "world-ground", true);
+            releaseAt(self, m, "world-ground", true, at);
             return;
         }
         float[] pose = peekPose(self, m.deckId);
         if (pose == null) {
-            release(self, m, "deck-gone", true);
+            releaseAt(self, m, "deck-gone", true, at);
             return;
         }
-        double dx = self.getX() - pose[0], dy = self.getY() - pose[1], dz = self.getZ() - pose[2];
+        double dx = at.x - pose[0], dy = at.y - pose[1], dz = at.z - pose[2];
         double reach = pose[7] + 2.0;
         if (dx * dx + dy * dy + dz * dz > reach * reach) {
-            release(self, m, "walked-away", true);
+            releaseAt(self, m, "walked-away", true, at);
             return;
         }
         // still near the hull (mid-jump etc.) — carry keeps flowing, but not forever
-        if (++m.lostTicks > LOST_GRACE_TICKS) release(self, m, "lost-grace", true);
+        if (++m.lostTicks > LOST_GRACE_TICKS) releaseAt(self, m, "lost-grace", true, at);
     }
 
     public static void release(Entity self, Mind m, String why, boolean keepGhost) {
+        releaseAt(self,m,why,keepGhost,self.position());
+    }
+    private static void releaseAt(Entity self, Mind m, String why, boolean keepGhost,Vec3 at) {
         if (m.deckId != 0L) dbg(self, "ride OFF id=" + m.deckId + " why=" + why);
+        if (keepGhost && fastCarry(self)) {
+            Vec3 velocity=self.level().isClientSide()?CLIENT_DEPARTURE.apply(self,at):com.koper.koper_lib.network.KontraMotionServer.pointVelocity(m.deckId,at);
+            if (velocity!=null && KontraFrame.finite(velocity)) { m.ghostX=velocity.x; m.ghostY=velocity.y; m.ghostZ=velocity.z; }
+        }
         m.deckId = 0L;
         m.basePos = null;
         m.baseRot = null;

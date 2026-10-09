@@ -41,6 +41,7 @@ public final class FullpackReloader {
 
     public static void prepareCaches() {
         FullpackAddons.prepareReload();
+        FullpackTombstones.beginLoad();
         com.koper.koper_lib.scripting.JavaHookRegistry.clearAll();
         com.koper.koper_lib.scripting.ScriptCommandDispatcher.clearBacklog();
         com.koper.koper_lib.scripting.KoperScriptCommands.clear();
@@ -65,6 +66,7 @@ public final class FullpackReloader {
                 KoperLibDirectories.FULLPACKS.resolve(folder), namespace);
         });
         new UniversalLoader().loadExternalContent();
+        FullpackTombstones.finishLoad();
         CreativeTabRegistry.removeDisabledPackTabs();
         CreativeTabRegistry.processTabs(KoperLib.MOD_ID);
         com.koper.koper_lib.kui.KuiBaker.syncAll(false);

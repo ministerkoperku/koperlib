@@ -14,6 +14,9 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 @Mixin(ServerGamePacketListenerImpl.class)
 public interface ServerGamePacketAccessor {
 
+    @org.spongepowered.asm.mixin.gen.Accessor("awaitingPositionFromClient")
+    net.minecraft.world.phys.Vec3 koper$pendingTeleport();
+
     @Invoker("isEntityCollidingWithAnythingNew")
     boolean koper$collidingWithAnythingNew(LevelReader level, Entity entity, AABB oldAABB,
                                            double newX, double newY, double newZ);

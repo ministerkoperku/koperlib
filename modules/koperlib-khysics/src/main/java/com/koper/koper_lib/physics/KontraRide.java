@@ -149,7 +149,11 @@ public final class KontraRide {
         AABB box = entity.getBoundingBox();
         double ex = mid(box.minX, box.maxX), ey = mid(box.minY, box.maxY), ez = mid(box.minZ, box.maxZ);
         double ehx = half(box.minX, box.maxX), ehy = half(box.minY, box.maxY), ehz = half(box.minZ, box.maxZ);
-        double cullR = Math.max(ehx, Math.max(ehy, ehz)) + 1.5 + worldDelta.length();
+        var carryMind=KontraGlue.mind(entity);
+        Vec3 carry=carryMind.fedCarry && KontraGlue.fastCarry(entity)?new Vec3(carryMind.fedX,carryMind.fedY,carryMind.fedZ):Vec3.ZERO;
+        ex+=carry.x; ey+=carry.y; ez+=carry.z;
+        double ownLength=worldDelta.subtract(carry).length();
+        double cullR = Math.max(ehx, Math.max(ehy, ehz)) + 1.5 + ownLength;
         double cullSq = (cullR + 1.0) * (cullR + 1.0);
 
         List<KItem> ks = new ArrayList<>();
@@ -163,7 +167,7 @@ public final class KontraRide {
             float[] rot = KoperPhys.getCachedRot(e.getKey());
             if (pos == null || rot == null) continue;
             double dx = ex - pos[0], dy = ey - pos[1], dz = ez - pos[2];
-            double reach = d.cachedRadius + 2.0 + worldDelta.length();
+            double reach = d.cachedRadius + 2.0 + ownLength;
             if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
 
             double[] le = invRot(ex - pos[0], ey - pos[1], ez - pos[2], rot);

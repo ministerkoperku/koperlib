@@ -57,6 +57,10 @@ pub enum PhysicsCmd {
     SetBlockMaterials { id: i64, materials: Vec<[f32; 15]> },
     SetBlockShapes { id: i64, shapes: Vec<[f32; 11]> },
     SetVelocity  { id: i64, v: [f32; 3] },
+    SetAngularVelocity { id: i64, v: [f32; 3] },
+    SetAtmosphere { drag: f32 },
+    SetFlightPolicy { enabled: bool, max_speed: f32, min_section_y: i32, max_section_y: i32 },
+    Fence(std::sync::mpsc::Sender<WorldSnapshot>),
     SetDamping   { id: i64, linear: f32, angular: f32 },
     SetParked    { id: i64, parked: bool },
     SetTransform { id: i64, pos: [f32; 3], rot: [f32; 4] },
@@ -390,6 +394,9 @@ pub struct KhysWorld {
     kontras:          HashMap<i64, KontraKtion>,
     fluids:           HashMap<[i32; 3], f32>,
     sections:         SectionStore,
+    atmosphere_scale: f32,
+    fast_flight:      Option<f32>,
+    terrain_y_bounds: Option<(i32,i32)>,
     step_count:       u64,
     // pending splits from block removal — drained by Java each tick
     pending_splits: Vec<(i64, Vec<Vec<[i32; 3]>>)>,
@@ -452,6 +459,9 @@ impl KhysWorld {
             kontras:            HashMap::new(),
             fluids:             HashMap::new(),
             sections:           SectionStore::new(),
+            atmosphere_scale: 1.0,
+            fast_flight:        None,
+            terrain_y_bounds:  None,
             step_count:         0,
             pending_splits:     Vec::new(),
             joints:             HashMap::new(),
@@ -483,6 +493,28 @@ impl KhysWorld {
             PhysicsCmd::SetBlockMaterials { id, materials } => self.set_block_materials(id, &materials),
             PhysicsCmd::SetBlockShapes { id, shapes } => self.set_block_shapes(id, &shapes),
             PhysicsCmd::SetVelocity { id, v }         => self.set_velocity(id, v),
+            PhysicsCmd::SetAngularVelocity { id, v } => {
+                if let Some(k)=self.kontras.get(&id) { if let Some(b)=self.bodies.get_mut(k.body) {
+                    let w=Vec3::from(v); if w.is_finite() { b.set_angvel(w,true); }
+                }}
+            },
+            PhysicsCmd::Fence(reply) => { let _=reply.send(self.build_snapshot()); },
+            PhysicsCmd::SetAtmosphere { drag } => {
+                if drag.is_finite() && drag>=0.0 {
+                    self.atmosphere_scale=(drag/0.01).min(1.0e6);
+                    for k in self.kontras.values() { if let Some(b)=self.bodies.get_mut(k.body) {
+                        let (linear,angular)=match k.aero_mode {
+                            AeroMode::Low => (0.70,1.0), AeroMode::Correct => (0.06,0.12), AeroMode::Extreme => (0.02,0.05),
+                        };
+                        b.set_linear_damping(linear*self.atmosphere_scale);
+                        b.set_angular_damping(angular*self.atmosphere_scale);
+                    }}
+                }
+            },
+            PhysicsCmd::SetFlightPolicy { enabled, max_speed, min_section_y, max_section_y } => {
+                self.terrain_y_bounds=if min_section_y<=max_section_y {Some((min_section_y,max_section_y))} else {None};
+                self.fast_flight=if enabled && max_speed.is_finite() && max_speed>0.0 && max_speed<=10000.0 {Some(max_speed)} else {None};
+            },
             PhysicsCmd::SetDamping { id, linear, angular } => self.set_damping(id, linear, angular),
             PhysicsCmd::SetParked { id, parked } => self.set_parked(id, parked),
             PhysicsCmd::SetTransform { id, pos, rot } => self.set_transform(id, pos, rot),
@@ -513,8 +545,8 @@ impl KhysWorld {
                             AeroMode::Correct => (0.06, 0.12),
                             AeroMode::Extreme => (0.02, 0.05),
                         };
-                        b.set_linear_damping(linear);
-                        b.set_angular_damping(angular);
+                        b.set_linear_damping(linear*self.atmosphere_scale);
+                        b.set_angular_damping(angular*self.atmosphere_scale);
                         b.wake_up(true);
                     }
                 }
@@ -672,8 +704,10 @@ impl KhysWorld {
         self.sections.rebuild_dirty(
             &mut self.colliders, &mut self.islands, &mut self.bodies,
             InteractionGroups::new(GROUP_TERRAIN, GROUP_KONTRA, InteractionTestMode::And));
+        // Topology/spawn bounds must be current BEFORE the first readiness check.
+        for k in self.kontras.values_mut() { k.sync_obb(&self.bodies); }
         // want-list housekeeping at 10Hz is plenty
-        if self.step_count % 6 == 0 {
+        if self.fast_flight.is_some() || self.step_count % 6 == 0 {
             let wanted = self.wanted_sections();
             self.sections.update_wanted(&wanted, self.step_count,
                 &mut self.colliders, &mut self.islands, &mut self.bodies);
@@ -685,6 +719,7 @@ impl KhysWorld {
         self.apply_aero(dt);
         self.apply_pushes(dt);
         let t_fluid = t_start.elapsed();
+        let held = self.hold_unprepared_flight(dt);
         let hooks = AssemblyHooks { assembly: self.assemblies() };
         self.pipeline.step(
             self.gravity, &self.params,
@@ -693,6 +728,12 @@ impl KhysWorld {
             &mut self.impulse_joints, &mut self.multibody_joints,
             &mut self.ccd, &hooks, &(),
         );
+        for (h,v,w) in held {
+            if let Some(b)=self.bodies.get_mut(h) {
+                b.set_body_type(RigidBodyType::Dynamic,true);
+                b.set_linvel(v,true); b.set_angvel(w,true);
+            }
+        }
         let t_pipeline = t_start.elapsed();
         self.koper_unwrap_joints();
         if KHYS_VALIDATE_ISLANDS {
@@ -854,7 +895,7 @@ impl KhysWorld {
             let lv = b.linvel();
             let v = Vec3::new(lv.x, lv.y, lv.z);
             if !v.is_finite() { b.set_linvel(Vec3::ZERO, false); }
-            else if v.length() > V_MAX { b.set_linvel(v.normalize() * V_MAX, false); }
+            else if v.length() > self.fast_flight.unwrap_or(V_MAX) { b.set_linvel(v.normalize() * self.fast_flight.unwrap_or(V_MAX), false); }
             let av = b.angvel();
             let w = Vec3::new(av.x, av.y, av.z);
             if !w.is_finite() { b.set_angvel(Vec3::ZERO, false); }
@@ -909,6 +950,12 @@ impl KhysWorld {
                 m.x_axis.z.abs() * h.x + m.y_axis.z.abs() * h.y + m.z_axis.z.abs() * h.z,
             );
             let pos  = Vec3::new(t.x, t.y, t.z);
+            if self.fast_flight.is_some() {
+                let radius=k.obb.half.length()+2.0;
+                let (keys,_) = flight_sections(pos,pos+Vec3::new(v.x,v.y,v.z)*(1.0/60.0),radius,512);
+                wanted.extend(keys.into_iter().filter(|key| self.terrain_y_bounds.map_or(true, |(min,max)|key[1]>=min && key[1]<=max)));
+                continue;
+            }
             let look = Vec3::new(v.x, v.y, v.z) * 0.75;
             let min = pos - ext - Vec3::splat(4.0) + look.min(Vec3::ZERO) - Vec3::new(0.0, 12.0, 0.0);
             let max = pos + ext + Vec3::splat(4.0) + look.max(Vec3::ZERO);
@@ -923,6 +970,41 @@ impl KhysWorld {
             }}}
         }
         wanted
+    }
+
+    fn hold_unprepared_flight(&mut self, dt: f32) -> Vec<(RigidBodyHandle,Vec3,Vec3)> {
+        let Some(max_speed)=self.fast_flight else {return Vec::new()};
+        let groups=self.assemblies();
+        let mut blocked=HashSet::new();
+        for k in self.kontras.values() {
+            let Some(b)=self.bodies.get(k.body) else {continue};
+            if !b.is_dynamic() {continue;}
+            let start=b.translation();
+            let v=b.linvel();
+            let acceleration=self.gravity*b.gravity_scale()+b.user_force()/b.mass().max(0.001);
+            let end=start+(v+acceleration*dt)*dt;
+            let (keys,complete)=flight_sections(start,end,k.obb.half.length()+2.0,512);
+            let ready=complete && v.is_finite() && v.length()<=max_speed+0.01
+                && keys.iter().all(|key|self.terrain_y_bounds.is_some_and(|(min,max)|key[1]<min || key[1]>max) || self.sections.sections.contains_key(key));
+            if !ready {
+                blocked.insert(groups.get(&k.body).copied().unwrap_or(k.body.0.into_raw_parts().0));
+                for key in keys { if self.terrain_y_bounds.map_or(true,|(min,max)|key[1]>=min && key[1]<=max) && !self.sections.sections.contains_key(&key) && !self.sections.missing.contains(&key) {
+                    self.sections.missing.push(key);
+                }}
+            }
+        }
+        let mut held=Vec::new();
+        for k in self.kontras.values() {
+            let group=groups.get(&k.body).copied().unwrap_or(k.body.0.into_raw_parts().0);
+            if !blocked.contains(&group) {continue;}
+            if let Some(b)=self.bodies.get_mut(k.body) {
+                if b.is_dynamic() {
+                    held.push((k.body,b.linvel(),b.angvel()));
+                    b.set_body_type(RigidBodyType::Fixed,true);
+                }
+            }
+        }
+        held
     }
 
     // last-resort de-clipper: a block that ended up INSIDE cached solid terrain (missed CCD, monster
@@ -1549,6 +1631,7 @@ impl KhysWorld {
     // Three per-kontraktion costs. None of them adds fake self-righting or vertical damping.
     // Low is a cheap lumped wing, Correct is one proper craft airfoil, Extreme is per-block panels.
     fn apply_aero(&mut self, dt: f32) {
+        if self.atmosphere_scale==0.0 { return; }
         if dt <= 0.0 { return; }
         // real gravity magnitude (was a hard 28) — lift caps and balloon force scale with the world
         #[allow(non_snake_case)]
@@ -1620,7 +1703,7 @@ impl KhysWorld {
             let ang = Vec3::new(av.x, av.y, av.z);
 
             let density_at = |y: f32| {
-                RHO0 * (-(y - SEA_Y) / SCALE_HEIGHT).exp().clamp(0.001, 1.25)
+                RHO0 * self.atmosphere_scale * (-(y - SEA_Y) / SCALE_HEIGHT).exp().clamp(0.001, 1.25)
             };
             let mut net_force = Vec3::ZERO;
             let mut net_torque = Vec3::ZERO;
@@ -2166,8 +2249,8 @@ impl KhysWorld {
             .gyroscopic_forces_enabled(false)
             .translation(Vec3::new(world_pos[0], world_pos[1], world_pos[2]))
             .ccd_enabled(true)
-            .linear_damping(0.08)
-            .angular_damping(0.14)
+            .linear_damping(0.08*self.atmosphere_scale)
+            .angular_damping(0.14*self.atmosphere_scale)
             .sleeping(false)
             .build();
         let body_handle = self.bodies.insert(rb);
@@ -2235,8 +2318,8 @@ impl KhysWorld {
             .gyroscopic_forces_enabled(false)
             .translation(Vec3::new(world_pos[0], world_pos[1], world_pos[2]))
             .ccd_enabled(true)
-            .linear_damping(0.08)
-            .angular_damping(0.14)
+            .linear_damping(0.08*self.atmosphere_scale)
+            .angular_damping(0.14*self.atmosphere_scale)
             .sleeping(false)
             .build();
         let body_handle = self.bodies.insert(rb);
@@ -4976,4 +5059,111 @@ mod koper_plane_tests {
         }
         assert!(body(&world, 1).linvel().z > 25.0, "props could not get it to flying speed");
     }
+}
+
+#[cfg(test)]
+mod flight_tests {
+    use super::*;
+    fn rocket() -> KhysWorld {
+        let mut w=KhysWorld::new(); w.set_gravity(0.0,0.0,0.0); w.fast_flight=Some(10000.0);
+        w.spawn_kontraktion_from_offsets(1,vec![[0.0,0.0,0.0]],&[1.0],0,[8.0,8.0,8.0]);
+        w.set_velocity(1,[1000.0,0.0,0.0]); w
+    }
+    #[test] fn first_step_wide_hull_waits_for_its_whole_corridor() {
+        let mut w=rocket();
+        w.spawn_kontraktion_from_offsets(2,vec![[0.0,0.0,0.0],[40.0,0.0,0.0]],&[1.0,1.0],0,[8.0,8.0,8.0]);
+        w.set_velocity(2,[1000.0,0.0,0.0]);
+        for x in 0..=2 {for y in 0..=1 {for z in 0..=1 {w.sections.upload([x,y,z],Box::new([0;64]),0);}}}
+        let h=w.kontras[&2].body; w.step(1.0/60.0);
+        assert!((w.bodies[h].translation().x-8.0).abs()<0.01,"wide hull entered unknown sections on its first step");
+    }
+    #[test] fn fast_flight_waits_for_unknown_terrain_without_losing_velocity() {
+        let mut w=rocket(); let h=w.kontras[&1].body; w.step(1.0/60.0);
+        assert!((w.bodies[h].translation().x-8.0).abs()<0.01);
+        assert!(w.bodies[h].linvel().x>900.0); assert!(!w.sections.missing.is_empty());
+    }
+    #[test] fn fast_flight_advances_after_empty_sections_arrive() {
+        let mut w=rocket(); let h=w.kontras[&1].body;
+        for x in -1..=8 {for y in -1..=2 {for z in -1..=2 {w.sections.upload([x,y,z],Box::new([0;64]),0);}}}
+        w.step(1.0/60.0); assert!(w.bodies[h].translation().x>20.0);
+    }
+    #[test] fn fast_flight_ccd_stops_at_a_thin_wall() {
+        let mut w=rocket(); let h=w.kontras[&1].body;
+        for x in -1..=8 {for y in -1..=2 {for z in -1..=2 {
+            let mut bits=Box::new([0u64;64]);
+            if x==1 && y==0 && z==0 {let i=(8*16+8)*16; bits[i>>6]|=1u64<<(i&63);}
+            w.sections.upload([x,y,z],bits,0);
+        }}}
+        w.step(1.0/60.0); assert!(w.bodies[h].translation().x<16.0,"rocket crossed a one-block wall");
+    }
+    #[test] fn space_above_build_range_needs_no_empty_chunk_uploads() {
+        let mut w=rocket(); w.terrain_y_bounds=Some((0,1));
+        let h=w.kontras[&1].body;
+        w.bodies.get_mut(h).unwrap().set_translation(Vec3::new(8.0,1000.0,8.0),true);
+        w.step(1.0/60.0);assert!(w.bodies[h].translation().x>20.0);
+        assert!(w.sections.missing.is_empty());
+    }
+    #[test] fn vacuum_preserves_linear_and_angular_momentum() {
+        let mut w=rocket(); w.process_cmd(PhysicsCmd::SetAtmosphere{drag:0.0});
+        w.process_cmd(PhysicsCmd::SetAeroMode{id:1,mode:AeroMode::Correct});
+        w.terrain_y_bounds=Some((0,1));
+        let h=w.kontras[&1].body;
+        w.bodies.get_mut(h).unwrap().set_translation(Vec3::new(8.0,1000.0,8.0),true);
+        w.bodies.get_mut(h).unwrap().set_angvel(Vec3::new(0.0,2.0,0.0),true);
+        for _ in 0..60 {w.step(1.0/60.0);}
+        assert!((w.bodies[h].linvel().x-1000.0).abs()<0.01);
+        assert!((w.bodies[h].angvel().y-2.0).abs()<0.01);
+    }
+    #[test] fn fast_flight_ccd_stops_opposing_bodies() {
+        let mut w=rocket(); w.process_cmd(PhysicsCmd::SetAtmosphere{drag:0.0});
+        w.terrain_y_bounds=Some((0,1));
+        let h=w.kontras[&1].body;
+        w.bodies.get_mut(h).unwrap().set_translation(Vec3::new(8.0,1000.0,8.0),true);
+        w.spawn_kontraktion_from_offsets(2,vec![[0.0,0.0,0.0]],&[1.0],0,[30.0,1000.0,8.0]);
+        w.set_velocity(2,[-1000.0,0.0,0.0]);
+        w.step(1.0/60.0);
+        let x=w.bodies[h].translation().x;let other=w.bodies[w.kontras[&2].body].translation().x;
+        assert!(x<other,"opposing fast bodies crossed: {x} >= {other}");
+    }
+    #[test] fn configured_probe_speeds_advance_in_known_void() {
+        for speed in [100.0,320.0,1000.0,10000.0] {
+            let mut w=rocket(); w.process_cmd(PhysicsCmd::SetAtmosphere{drag:0.0});
+            w.process_cmd(PhysicsCmd::SetAeroMode{id:1,mode:AeroMode::Correct});
+            w.terrain_y_bounds=Some((0,1));let h=w.kontras[&1].body;
+            w.bodies.get_mut(h).unwrap().set_translation(Vec3::new(8.0,1000.0,8.0),true);
+            w.set_velocity(1,[speed,0.0,0.0]);
+            for _ in 0..60 {w.step(1.0/60.0);}
+            assert!((w.bodies[h].translation().x-8.0-speed).abs()<0.1,"failed speed {speed}");
+            assert!((w.bodies[h].linvel().x-speed).abs()<0.01);
+        }
+    }
+    #[test] fn swept_sections_are_bounded_for_diagonal_flight() {
+        let (keys,complete)=flight_sections(Vec3::ZERO,Vec3::splat(500.0),1.0,512);
+        assert!(complete);assert!(keys.len()<=512);assert!(keys.contains(&[31,31,31]));
+        let (keys,complete)=flight_sections(Vec3::ZERO,Vec3::splat(1000000.0),100.0,512);
+        assert!(!complete);assert!(keys.len()<=512);
+    }
+}
+
+fn flight_sections(start: Vec3,end: Vec3,radius: f32,budget: usize) -> (HashSet<[i32;3]>,bool) {
+    let mut out=HashSet::new();
+    if !start.is_finite() || !end.is_finite() || !radius.is_finite() || radius<0.0 || budget==0 {return (out,false);}
+    let delta=end-start;
+    let steps=(delta.abs().max_element()/8.0).ceil().max(1.0) as usize;
+    if steps>budget.saturating_mul(4) {return (out,false);}
+    for i in 0..steps {
+        let a=start+delta*(i as f32/steps as f32);
+        let b=start+delta*((i+1) as f32/steps as f32);
+        let min=(a.min(b)-Vec3::splat(radius))/16.0;
+        let max=(a.max(b)+Vec3::splat(radius))/16.0;
+        for x in min.x.floor() as i32..=max.x.floor() as i32 {
+            for y in min.y.floor() as i32..=max.y.floor() as i32 {
+                for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                    if !out.contains(&[x,y,z]) && out.len()==budget {return (out,false);}
+                    out.insert([x,y,z]);
+                }
+            }
+        }
+    }
+    (out,true)
 }

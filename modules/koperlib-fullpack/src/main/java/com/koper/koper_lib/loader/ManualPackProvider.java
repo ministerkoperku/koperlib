@@ -140,10 +140,9 @@ public class ManualPackProvider implements RepositorySource {
             if (type != PackType.SERVER_DATA) return;
             Path nsDir = root.resolve("data").resolve(namespace);
             if (!Files.isDirectory(nsDir)) return;
-            try (var walk = Files.walk(nsDir)) {
-                walk.filter(Files::isRegularFile).forEach(p -> {
+            try {
+                FullPackResourcePack.matchingFiles(nsDir, nsDir, prefix).forEach(p -> {
                     String rel = nsDir.relativize(p).toString().replace('\\', '/');
-                    if (!rel.startsWith(prefix)) return;
                     Identifier id = Identifier.fromNamespaceAndPath(namespace, rel);
                     if (id != null) output.accept(id, Stary263Wykrywacz.watch(type, id, info.id(), () -> Files.newInputStream(p)));
                 });

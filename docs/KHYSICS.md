@@ -125,24 +125,40 @@ Combining a small `mass` with a large `balloon` gives an airship. Combining `lif
 
 ## Dimensions and gravity
 
-Per dimension physics settings live in a dimensions file in the pack:
+Per-dimension physics overrides live in `khysics/dimensions/*.json` inside an enabled fullpack. Each file configures one dimension:
 
 ```json
 {
-  "khysics": {
-    "dimensions": [
-      { "dimension": "minecraft:the_nether", "gravity": -6.0, "universal_drag": 0.02 },
-      { "dimension": "mypack:low_g",        "gravity": -1.6, "universal_drag": 0.0 }
-    ]
+  "dimension": "mypack:space",
+  "gravity": [0, 0, 0],
+  "universal_drag": 0,
+  "flight": {
+    "enabled": true,
+    "min_body_y": -10000,
+    "max_body_y": 10000,
+    "max_speed": 10000,
+    "vacuum_momentum": true
   }
 }
 ```
 
-`gravity` is metres per second squared and negative points down. `universal_drag` is ambient air resistance applied to everything in that dimension, which is how a dimension gets a thick atmosphere or a vacuum.
+Gravity is a vector in blocks/s². The default is `[0, -28, 0]`. Ambient drag defaults to `0.01`; it scales native body damping and aerodynamic density relative to that default. Zero disables ambient damping and aerodynamics. Water and solid collisions still act. `vacuum_momentum` retains inherited occupant momentum in air; it does not disable vanilla player gravity or water/contact friction.
 
-Water buoyancy, balloon lift and the aero lift caps all scale with this gravity. They used to be pinned to 28 whatever the dimension said, so a low-gravity dimension got full-strength buoyancy and boats jumped out of the water.
+Fast flight requires explicit finite bounds and a positive `max_speed` no greater than 10000 blocks/s. These values configure the simulation; they are not a guarantee that every hull or client works at that speed. Ordinary dimensions retain the -2048..6000 body-origin altitude bounds and the existing displacement guard. No space dimension, planets, rockets or automatic portals are created by this setting.
 
-These load before saved kontraptions are restored, so a body that was resting when the world was saved wakes up with the right gravity.
+In fast mode, the native worker checks swept terrain coverage before integration. Unknown sections hold the connected assembly without erasing its velocity. Collision sections outside the dimension's build height are known empty. Each body's corridor is limited to 512 sections; oversized corridors hold rather than skip collision. Rotating hull bounds cover every block from the first step. Native CCD handles thin obstacles and moving bodies. Minecraft chunk preparation remains on the server thread.
+
+Standing players negotiate a body-relative movement session after geometry arrives and after vanilla teleport acknowledgement. The server validates body, dimension, epoch, sequence, finite coordinates and the player's own movement budget, then resolves that movement against the cabin. Accepted own travel is bounded to 1.5 blocks per server tick, with at most four ticks of elapsed movement budget. Seats retain their local mount anchors. Rendered player placement and targeting follow the hull's interpolated frame. Server interaction reach and grid-container range use the authenticated anchor in the current hull frame, so rigid travel does not count as distance from a clicked block. Building and use packets retain local block keys. Departure uses native linear and angular point velocity.
+
+Fast-mode non-player occupants and seats retain direct tracking while vanilla changes chunk visibility. Their current chunks receive nonpersistent loading/simulation tickets expiring after 20 ticks (radius two); the current chunk is loaded before positioning. This prevents hidden occupants from being dropped from carry or transfer collection. Chunk generation can still stall the server; known-empty native terrain does not make vanilla entity chunks free.
+
+`KoperPhys.transferAssembly(root, target, where, yawQuarters)` stages the complete connected assembly and its seated/tracked occupants. It preserves block entity contents, local data, body stash, scheduled grid ticks, aero overrides, joint settings and exact linear/angular velocity; destination yaw rotates velocities. The destination must be loaded and clear. After commit it stays parked until occupants are registered and players acknowledge teleport and geometry initialization; then exact motion resumes. Refusal returns `null` and restores the source. Failed occupant return removes destination copies, keeps the source parked and transfer-locked, and retries recovery on subsequent server ticks.
+
+Transfer callbacks receive the old-to-new body remap after destination geometry and occupants are ready. Source bodies are removed afterward. Callback exceptions are logged; arbitrary external addon side effects cannot be rolled back. Addons requesting the same transferred seat can reuse its staged mount. Generic seats remain transient across save/reload; addons continue to recreate their own seats through the existing spawn/restore hooks. Body inventories and joints use the existing persisted format.
+
+The Koperstuff developer module exposes `/koperlib flight probe <speed>`, `board`, `check`, `refuse`, `transfer`, `resume` and `stop`. The console-only alias is `koper-flight`. Use a disposable world with flight enabled in the source and End. The probe creates a bounded cabin, a jointed part, chest cargo and standing/seated mobs at `(8,1000,8)`. `refuse` injects an occupant teleport refusal; `resume` checks saved cargo and joints after restarting the server. The probe keeps a bounded recent set of source/target chunks ticking, warms up before acceleration and logs local rider error. These diagnostic chunk loads are not a void-performance benchmark. Player walking, jumping, rotation and network-delay trials require a connected client.
+
+Coordinates still pass through native floats; precision degrades far from the origin. There is no floating-origin implementation. Fast flight requires matching Java and native builds; older native libraries and other backends can refuse it.
 
 ## Joints and motors
 
