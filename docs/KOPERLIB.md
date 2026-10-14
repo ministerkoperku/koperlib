@@ -22,24 +22,25 @@ Kodel is the model and animation system for blocks, mobs, armour, items and the 
 8. [Block entities and per position state](#block-entities-and-per-position-state)
 9. [Entities](#entities)
 10. [Enchantments](#enchantments)
-11. [Menus and HUD (KUI)](#menus-and-hud-kui)
-12. [Lua scripting](#lua-scripting)
-13. [The Java tier](#the-java-tier)
-14. [Persistent state](#persistent-state)
-15. [World events](#world-events)
-16. [Quests](#quests)
-17. [Dialogue](#dialogue)
-18. [JSON actions](#json-actions)
-19. [Reloading](#reloading)
-20. [Commands](#commands)
-21. [Config](#config)
-22. [Physics (khysics)](#physics-khysics)
-23. [Rendering](#rendering)
-24. [The native engine](#the-native-engine)
-25. [Bedrock addons](#bedrock-addons)
-26. [When something does not load](#when-something-does-not-load)
-27. [Known limits](#known-limits)
-28. [Stress testing](#stress-testing)
+11. [Dimensions and space](#dimensions-and-space)
+12. [Menus and HUD (KUI)](#menus-and-hud-kui)
+13. [Lua scripting](#lua-scripting)
+14. [The Java tier](#the-java-tier)
+15. [Persistent state](#persistent-state)
+16. [World events](#world-events)
+17. [Quests](#quests)
+18. [Dialogue](#dialogue)
+19. [JSON actions](#json-actions)
+20. [Reloading](#reloading)
+21. [Commands](#commands)
+22. [Config](#config)
+23. [Physics (khysics)](#physics-khysics)
+24. [Rendering](#rendering)
+25. [The native engine](#the-native-engine)
+26. [Bedrock addons](#bedrock-addons)
+27. [When something does not load](#when-something-does-not-load)
+28. [Known limits](#known-limits)
+29. [Stress testing](#stress-testing)
 
 ## Five minute fullpack
 
@@ -193,7 +194,7 @@ Older nested layouts (`data/items/`, `koperlib/items/`, `jsons/items/`) still lo
 
 Scripts bind by filename. A file at `scripts/flame_sword.lua` automatically attaches to `items/flame_sword.json`. No wiring, no reference in the JSON. For a different name, set `logic` or `scripts` in the JSON explicitly.
 
-The loader scans these folder names, in singular or plural, for the obvious content types: `items`, `blocks`, `entities` / `mobs`, `dimensions`, `recipes`, `loot` / `loot_tables`, `advancements`, `attributes`, `effects` / `status_effects`, `enchantments`, `potions`, `sounds`, `spawn_eggs`, `creative_tabs`, `guis`, `quests`, `particles` / `fx` / `vfx`, `portals`, `scripts`, `models`, `textures`.
+The loader scans these folder names, in singular or plural, for the obvious content types: `items`, `blocks`, `entities` / `mobs`, `dimensions`, `space_bodies`, `recipes`, `loot` / `loot_tables`, `advancements`, `attributes`, `effects` / `status_effects`, `enchantments`, `potions`, `sounds`, `spawn_eggs`, `creative_tabs`, `guis`, `quests`, `particles` / `fx` / `vfx`, `portals`, `scripts`, `models`, `textures`.
 
 ## Items
 
@@ -435,6 +436,76 @@ Use `on_ai` for decisions and `on_tick` for continuous per tick work. Keep both 
 `is_curse` puts the enchantment in the vanilla `#minecraft:enchantment/curse` tag, which is what actually makes something a curse in modern Minecraft. Curses stay out of the non treasure pool, so they only appear from treasure sources.
 
 `min_level` has no direct vanilla equivalent. KoperLib maps it onto where the cost curve starts, so `min_level: 3` shows up about as late in the enchanting table as a level 3 enchantment would.
+
+## Dimensions and space
+
+`dimensions/moon.json` makes a dimension. It exists from the next world load; a reload does not add or remove dimensions.
+
+```json
+{
+  "id": "mypack:moon",
+  "environment": "overworld",
+  "generator": "flat",
+  "biome": "minecraft:plains",
+  "fixed_time": 6000,
+  "entity": { "gravity": 0.17, "jump": 1.5, "fall_damage": 0.25, "safe_fall": 3 }
+}
+```
+
+`environment` is `overworld`, `nether`, `end` or `space` and picks the vanilla dimension the new one starts from: sky, fog, music, bed rules and the rest of its 26.3 environment attributes. `base_type` of `nether`, `end` or `space` also sets it. Height and light keep their own defaults (`min_y` -64, `height` 384, `logical_height` 256, `ambient_light` 0) whatever the environment, so a world made earlier keeps its terrain.
+
+`generator` is `void` (the default), `flat`, `noise` (overworld terrain in one `biome`) or a full vanilla generator object. Custom noise settings and biomes come from a datapack in the fullpack's `datapacks/` folder and are referenced from that generator object.
+
+The older keys still work and are translated, because Minecraft 26.3 ignores them in a dimension type:
+
+| Key | Becomes |
+|---|---|
+| `effects` (`minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`) | that dimension's sky, light and sound attributes |
+| `bed_works` | `gameplay/bed_rule` and `gameplay/straw_bed_rule` |
+| `respawn_anchor_works` | `gameplay/respawn_anchor_works` |
+| `has_raids` | `gameplay/can_start_raid` |
+| `piglin_safe` | `gameplay/piglins_zombify`, inverted |
+| `natural` | `gameplay/nether_portal_spawns_piglin` |
+| `ultrawarm` | `gameplay/water_evaporates` and `gameplay/fast_lava` |
+| `fixed_time` | an own world clock held at that tick |
+
+The 26.3 keys pass straight through and win over everything above: `skybox` (`none`, `overworld`, `end`), `cardinal_light`, `timelines`, `default_clock`, `has_fixed_time` and `attributes`. Attribute names without a namespace get `minecraft:`, so `"attributes": { "visual/sky_color": "#101020" }` works. Any other `effects` value or skybox name fails the dimension with an error in the log.
+
+`fixed_time` gives the dimension its own clock running copies of the vanilla day and moon timelines, paused at that tick. The clock is set and paused again at every server start; `/time` can still move it until then.
+
+`entity` multiplies vanilla attributes of every living entity in the dimension: `gravity`, `jump` (jump strength), `fall_damage` and `safe_fall` (safe fall distance). They are transient modifiers put on when an entity enters or loads in the dimension and taken off anywhere else, so nothing extra is saved. Physics bodies take their gravity from [Khysics dimension files](KHYSICS.md#dimensions-and-gravity) instead; a planet normally sets both.
+
+### Space
+
+`"environment": "space"` is a void dimension with a black sky, stars at full brightness, no clouds, no sleeping and no raids, frozen at midnight. Pair it with a Khysics dimension file for zero gravity and vacuum.
+
+`space_bodies/moon.json` puts a planet into a space dimension:
+
+```json
+{
+  "id": "mypack:moon",
+  "space": "mypack:space",
+  "pos": [4000, 0, -2500],
+  "radius": 300,
+  "atmosphere": 60,
+  "texture": "mypack:textures/space/moon.png",
+  "color": "#ffffff",
+  "atmosphere_color": "#406080ff",
+  "spin": 0.5,
+  "target": "mypack:moon",
+  "landing_size": 1000,
+  "arrive_y": 300,
+  "leave_y": 600
+}
+```
+
+The client draws it as a textured sphere (`texture` wraps around it once, `color` tints it, `spin` turns it in degrees per second) with a translucent shell when `atmosphere_color` has alpha. A body further away than most of the view distance is drawn nearer and smaller, so it keeps its size on screen; a body only shows in its `space` dimension.
+
+With a `target` the body can be landed on. Anything that comes within `radius + atmosphere` of `pos` moves to the target dimension at height `arrive_y`. The point where it touched the sphere decides where: straight down onto the top lands at x 0, z 0 of the planet, the edge of the sphere maps to `landing_size` blocks out. Velocity is turned so that falling into the sphere becomes falling down. Climbing above `leave_y` in the target dimension does the reverse and comes out just outside the sphere over the same spot, moving away from it.
+
+A whole physics build crosses at once with its seated and standing passengers, through Khysics' assembly transfer. The destination is loaded while the build approaches; if the transfer is refused (blocked or unloaded destination, outside the destination's flight bounds) it is tried again every other tick and an error is logged after five seconds. A build keeps its velocity unturned. Single entities, mobs, items and riders on vanilla vehicles cross on their own. Anything that just crossed waits three seconds before it can cross again.
+
+Each target dimension belongs to one body. Two bodies leading to the same dimension, or a body without `space`, `pos`, `radius` or `texture`, fail with an error in the log. Bodies reload with the pack.
 
 ## Menus and HUD (KUI)
 
@@ -816,7 +887,7 @@ The `events` block on any item, block or entity runs a small action language. No
 }
 ```
 
-Actions cover sound, particles, damage and healing, effects, teleporting, giving and taking items, setting blocks, spawning entities and projectiles, explosions, lightning, velocity, food and saturation, XP, attributes, cooldowns, item name and lore and model data, blockstate changes, animations, KFX effects, running a command, calling into Lua or Java, and control flow: `if` / `then` / `else`, `random`, `choose`, `repeat`, `every`, `later`, `delay`.
+Actions cover sound, particles, damage and healing, effects, teleporting, giving and taking items, setting blocks, spawning entities and projectiles, explosions, lightning, velocity, food and saturation, XP, attributes, cooldowns, item name and lore and model data, blockstate changes, animations, KFX effects, running a command, calling into Lua or Java, and control flow: `if` / `then` / `else`, `random`, `choose`, `repeat`, `every`, `later`, `delay`. A teleport with `"dimension": "mypack:moon"` moves the target to that dimension.
 
 Conditions available to `if`: `sneaking`, `sprinting`, `has_player`, `has_stack`, `has_target`, `has_item`, `health_above`, `health_below`, `target_health_above`, `target_health_below`, `day_time`, `dimension`, `chance`, `inventory_count`, `not`, `all`, `any`.
 

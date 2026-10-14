@@ -58,6 +58,7 @@
     "KontraPlayerRenderStateMixin",
     "KontraPlayerRendererMixin",
     "KontraScreenEffectMixin",
+    "KontraStandingRenderMixin",
     "KontraValueBoxGuardMixin",
     "KontraValueBoxSidedGuardMixin",
     "KontraValueBoxTransformGuardMixin",

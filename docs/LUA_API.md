@@ -133,11 +133,11 @@ entity:get_uuid()                  -> string
 entity:get_name()                  -> string
 entity:set_name(name)
 entity:get_pos()                   -> {x=, y=, z=}
-entity:teleport(x, y, z)
+entity:teleport(x, y, z [, dimension])
 entity:get_look_dir()              -> {x=, y=, z=}
 ```
 
-`get_look_direction` is an alias of `get_look_dir`.
+`get_look_direction` is an alias of `get_look_dir`. `teleport` with a dimension id such as `"mypack:moon"` moves the entity to that dimension; `koper.entity.teleport(e, x, y, z, dimension)` takes it the same way.
 
 ### Health and damage
 

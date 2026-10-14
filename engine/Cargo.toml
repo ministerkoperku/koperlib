@@ -25,3 +25,5 @@ opt-level = 1
 # rquickjs ships no android bindings. bionic aarch64 is LP64 like glibc so the gnu ones fit
 [patch.crates-io]
 rquickjs-sys = { path = "vendor/rquickjs-sys" }
+# parry 0.26.1 with the BVH remove fix from parry 0.30, see vendor/parry3d/MODIFICATIONS.md
+parry3d = { path = "vendor/parry3d" }

@@ -170,10 +170,11 @@ public final class ScriptCommandDispatcher {
             int colon = rest.indexOf(':');
             if (colon < 0) return null;
             String uuid = rest.substring(0, colon);
-            String[] xyz = rest.substring(colon + 1).split(",", 3);
+            String[] xyz = rest.substring(colon + 1).split(",", 4);
             if (xyz.length < 3) return null;
             return new ScriptCommand.Teleport(uuid,
-                Double.parseDouble(xyz[0]), Double.parseDouble(xyz[1]), Double.parseDouble(xyz[2]));
+                Double.parseDouble(xyz[0]), Double.parseDouble(xyz[1]), Double.parseDouble(xyz[2]),
+                xyz.length > 3 && !xyz[3].isBlank() ? xyz[3] : null);
 
         } else if (cmd.startsWith("play_sound:")) {
             String rest = cmd.substring("play_sound:".length());
@@ -639,9 +640,11 @@ public final class ScriptCommandDispatcher {
 
     private static void execute(ScriptCommand cmd, MinecraftServer server) {
         switch (cmd) {
-            case ScriptCommand.Teleport(var uuid, var x, var y, var z) -> {
+            case ScriptCommand.Teleport(var uuid, var x, var y, var z, var dimension) -> {
                 LivingEntity target = findEntity(server, uuid);
-                if (target instanceof ServerPlayer sp) {
+                if (dimension != null) {
+                    if (target != null) com.koper.koper_lib.api.KoperTeleport.to(target, dimension, x, y, z);
+                } else if (target instanceof ServerPlayer sp) {
                     sp.connection.teleport(x, y, z, sp.getYRot(), sp.getXRot());
                 } else if (target != null) {
                     target.snapTo(x, y, z, target.getYRot(), target.getXRot());

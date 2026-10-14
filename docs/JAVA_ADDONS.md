@@ -128,8 +128,8 @@ Then in the addon build:
 ```groovy
 repositories { mavenLocal(); mavenCentral() }
 dependencies {
-    implementation "com.koper.koper_lib:koperlib-core:0.1.1-alpha"
-    implementation "com.koper.koper_lib:koperlib-fullpack:0.1.1-alpha"
+    implementation "com.koper.koper_lib:koperlib-core:0.1.2-alpha"
+    implementation "com.koper.koper_lib:koperlib-fullpack:0.1.2-alpha"
 }
 ```
 
@@ -169,7 +169,28 @@ KoperLibAPI.fullpack().setEnabled("mypack", false);
 KoperLibAPI.fullpack().reload();
 ```
 
-Hooks registered this way go into a separate table from pack hooks and survive `/koperlib reload`. Pack hooks are recreated when the pack reloads. `setEnabled` persists the switch but does not reload automatically; call `reload()` on the server thread to apply it.
+Hooks registered this way go into a separate table from pack hooks and survive `/koperlib reload`.
+
+### Dimensions and space
+
+```java
+// any entity, own or another dimension; returns the entity as it exists afterwards
+Entity moved = KoperTeleport.to(entity, "mypack:moon", new Vec3(0, 300, 0), null);
+
+// a planet registered from code survives pack reloads; move it every tick for an orbit
+KoperSpace.register(new KoperSpace.Body("mypack:moon", "mypack:space", new Vec3(4000, 0, -2500),
+    300, 60, "mypack:textures/space/moon.png", 0xFFFFFFFF, 0x406080FF, 0.5f,
+    "mypack:moon", 1000, 300, 600));
+KoperSpace.move("mypack:moon", newCenter);
+
+// every listener must agree, or the crossing waits and is asked again
+KoperSpace.onCrossing("mymod", crossing -> !crossing.arriving() || hasHeatShield(crossing));
+```
+
+`KoperSpace.Crossing` carries the body, the direction, either the single `entity` or the physics `assembly` root id, and the destination. `KoperSpace.landingFor` and `departureFor` expose the sphere to planet mapping described in [Dimensions and space](KOPERLIB.md#dimensions-and-space). `KoperDimensionRef` also reports `skybox()` and the `entity` multipliers. The `player:dimension` world event (Lua `koper.events.on`, Java `KoperSnitch.listen`) reports dimension changes.
+
+A physics provider (Khysics) is reached through `FullpackAddons.physicsAssemblies`, `physicsCarries` and `physicsTransfer`; without one, only single entities cross.
+ Pack hooks are recreated when the pack reloads. `setEnabled` persists the switch but does not reload automatically; call `reload()` on the server thread to apply it.
 
 ## Extension points
 

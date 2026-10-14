@@ -180,6 +180,7 @@ public final class KontraGlue {
                 }
             }
             m.deckRot = r.obbRot != null ? r.obbRot.clone() : m.deckRot;
+            KontraStanders.note(self, at, m.deckId, peekPose(self, m.deckId));
             m.lostTicks = 0;
             m.lastRideNanos = System.nanoTime();
             com.koper.koper_lib.network.KontraMotionServer.track(self);

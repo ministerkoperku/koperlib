@@ -66,6 +66,7 @@ pub enum PhysicsCmd {
     SetTransform { id: i64, pos: [f32; 3], rot: [f32; 4] },
     AddBlock  { id: i64, offset: [f32; 3], mass: f32 },
     RemoveBlock { id: i64, local: [i32; 3] },
+    RemoveBlockExact { id: i64, offset: [f32; 3] },
     SetFluids(Vec<[i32; 4]>),
     // full 16^3 occupancy bitset for one section — Java streams these when we report them missing.
     // upload BEFORE the spawn cmd in the same batch = terrain is there for the very first step.
@@ -79,10 +80,16 @@ pub enum PhysicsCmd {
     SetAero { id: i64, surfaces: Vec<AeroSurface> },
     SetAeroMode { id: i64, mode: AeroMode },
     SetWind { v: [f32; 3] },
+    // per body wind; a non-finite vector hands the body back to the world wind
+    SetBodyWind { id: i64, v: [f32; 3] },
+    // the dimension's air: density multiplier, sea level, scale height (blocks for e-fold), floor
+    SetAir { density: f32, sea_level: f32, scale_height: f32, min_density: f32 },
+    SetPropReaction(f32),
     // joints — bearing = revolute + motor, piston = prismatic + motor. anchors in each body's
     // local (block-offset) space, axis shared by both local frames (kontras spawn unrotated)
     CreateRevoluteJoint { joint_id: i64, a: i64, b: i64, anchor_a: [f32; 3], anchor_b: [f32; 3], axis: [f32; 3] },
     CreatePrismaticJoint { joint_id: i64, a: i64, b: i64, anchor_a: [f32; 3], anchor_b: [f32; 3], axis: [f32; 3] },
+    JointSetBladeHandedness { joint_id: i64, hand: f32 },
     JointSetMotor { joint_id: i64, target_vel: f32, max_force: f32 },
     JointSetMotorPosition { joint_id: i64, target_pos: f32, stiffness: f32, damping: f32, max_force: f32, force_based: bool },
     JointSetLimits { joint_id: i64, min: f32, max: f32 },
@@ -226,6 +233,10 @@ pub struct KontraKtion {
     pub buoy_scale:        f32,
     // share of blocks sitting in water, written by apply_water
     pub submerged:         f32,
+    // local wind this body flies in (weather, biome, gusts), set by the game a few times a second.
+    // None = the world's global wind. the air the body feels eases toward it, never jumps
+    pub wind_target:       Option<Vec3>,
+    pub wind_now:          Vec3,
 }
 
 // blade pitch a flat plate gets while spinning in its own plane, rad. under the 0.30 stall
@@ -242,6 +253,7 @@ pub struct AeroSurface {
     pub area:   f32,  // m² of lifting/drag surface (1 per block)
     pub cd:     f32,  // drag coefficient
     pub cl:     f32,  // WING lift coefficient (airfoil, lift only while moving; 0 = not a wing)
+    pub propeller: f32, // axial blade coefficient, independent of wing lift
     pub buoy:   f32,  // BALLOON buoyancy (mass it lifts; rises to a density-altitude; 0 = not a balloon)
     pub chunky: bool, // a full block: no face of its own, normal is local up unless it's a prop blade
 }
@@ -313,6 +325,7 @@ fn koper_cmd_name(cmd: &PhysicsCmd) -> &'static str {
             PhysicsCmd::SetTransform { .. } => "SetTransform",
             PhysicsCmd::AddBlock { .. } => "AddBlock",
             PhysicsCmd::RemoveBlock { .. } => "RemoveBlock",
+            PhysicsCmd::RemoveBlockExact { .. } => "RemoveBlockExact",
             PhysicsCmd::SetFluids { .. } => "SetFluids",
             PhysicsCmd::UploadSection { .. } => "UploadSection",
             PhysicsCmd::SetTerrainBlock { .. } => "SetTerrainBlock",
@@ -322,8 +335,12 @@ fn koper_cmd_name(cmd: &PhysicsCmd) -> &'static str {
             PhysicsCmd::SetAero { .. } => "SetAero",
             PhysicsCmd::SetAeroMode { .. } => "SetAeroMode",
             PhysicsCmd::SetWind { .. } => "SetWind",
+            PhysicsCmd::SetBodyWind { .. } => "SetBodyWind",
+            PhysicsCmd::SetAir { .. } => "SetAir",
+            PhysicsCmd::SetPropReaction(..) => "SetPropReaction",
             PhysicsCmd::CreateRevoluteJoint { .. } => "CreateRevoluteJoint",
             PhysicsCmd::CreatePrismaticJoint { .. } => "CreatePrismaticJoint",
+            PhysicsCmd::JointSetBladeHandedness { .. } => "JointSetBladeHandedness",
             PhysicsCmd::JointSetMotor { .. } => "JointSetMotor",
             PhysicsCmd::JointSetMotorPosition { .. } => "JointSetMotorPosition",
             PhysicsCmd::JointSetLimits { .. } => "JointSetLimits",
@@ -370,8 +387,7 @@ struct JointRec {
     // revolute angle unwrapped past +-pi, tracked every step so java never has to guess the way round
     last_angle: Option<f32>,
     turned: f32,
-    // which way the motor last drove the spinning end about the axis, +1/-1. a prop's blades are
-    // twisted for that way round, like a real one; they don't re-twist when the air turns it back
+    // Fixed blade handedness. Changing the motor direction must not re-twist its blades.
     hand: f32,
 }
 
@@ -395,6 +411,16 @@ pub struct KhysWorld {
     fluids:           HashMap<[i32; 3], f32>,
     sections:         SectionStore,
     atmosphere_scale: f32,
+    // added to every height the air density is read at. 0 in the game; a replayed scene whose floor was
+    // moved to y = 0 puts its real height back here
+    air_altitude_offset: f32,
+    // the dimension's air (SetAir). defaults are the overworld the aero was tuned in
+    air_density: f32,
+    air_sea_level: f32,
+    air_scale_height: f32,
+    air_min_density: f32,
+    // share of a propeller's drag torque that reaches its airframe through the motor (SetPropReaction)
+    prop_reaction: f32,
     fast_flight:      Option<f32>,
     terrain_y_bounds: Option<(i32,i32)>,
     step_count:       u64,
@@ -460,6 +486,12 @@ impl KhysWorld {
             fluids:             HashMap::new(),
             sections:           SectionStore::new(),
             atmosphere_scale: 1.0,
+            air_altitude_offset: 0.0,
+            air_density: 1.0,
+            air_sea_level: 64.0,
+            air_scale_height: 180.0,
+            air_min_density: 0.001,
+            prop_reaction: 1.0,
             fast_flight:        None,
             terrain_y_bounds:  None,
             step_count:         0,
@@ -520,6 +552,7 @@ impl KhysWorld {
             PhysicsCmd::SetTransform { id, pos, rot } => self.set_transform(id, pos, rot),
             PhysicsCmd::AddBlock { id, offset, mass } => { self.add_block_at_local_offset(id, offset, mass); }
             PhysicsCmd::RemoveBlock { id, local }   => { self.remove_block_at_local_offset(id, local); }
+            PhysicsCmd::RemoveBlockExact { id, offset } => { self.remove_block_at_exact_offset(id, offset); }
             PhysicsCmd::SetFluids(data)             => self.set_fluids_raw(&data),
             PhysicsCmd::UploadSection { pos, bits } => {
                 self.sections.upload(pos, bits, self.step_count);
@@ -551,23 +584,51 @@ impl KhysWorld {
                     }
                 }
             }
-            PhysicsCmd::SetWind { v } => self.wind = Vec3::from(v),
+            PhysicsCmd::SetWind { v } => { let v = Vec3::from(v); if v.is_finite() { self.wind = v; } }
+            PhysicsCmd::SetBodyWind { id, v } => {
+                if let Some(k) = self.kontras.get_mut(&id) {
+                    let v = Vec3::from(v);
+                    if v.is_finite() {
+                        // a body that had no wind of its own starts from the one it was flying in
+                        if k.wind_target.is_none() { k.wind_now = self.wind; }
+                        k.wind_target = Some(v);
+                    } else {
+                        k.wind_target = None;
+                    }
+                }
+            }
+            PhysicsCmd::SetPropReaction(share) => {
+                if share.is_finite() && (0.0..=1.0).contains(&share) { self.prop_reaction = share; }
+            }
+            PhysicsCmd::SetAir { density, sea_level, scale_height, min_density } => {
+                if density.is_finite() && density >= 0.0 && sea_level.is_finite()
+                    && scale_height.is_finite() && scale_height > 0.0
+                    && min_density.is_finite() && min_density >= 0.0 {
+                    self.air_density = density;
+                    self.air_sea_level = sea_level;
+                    self.air_scale_height = scale_height;
+                    self.air_min_density = min_density;
+                }
+            }
             PhysicsCmd::CreateRevoluteJoint { joint_id, a, b, anchor_a, anchor_b, axis } => {
                 self.create_joint(joint_id, a, b, anchor_a, anchor_b, axis, false);
             }
             PhysicsCmd::CreatePrismaticJoint { joint_id, a, b, anchor_a, anchor_b, axis } => {
                 self.create_joint(joint_id, a, b, anchor_a, anchor_b, axis, true);
             }
+            PhysicsCmd::JointSetBladeHandedness { joint_id, hand } => {
+                if hand != 1.0 && hand != -1.0 { return; }
+                if let Some(rec) = self.joints.get_mut(&joint_id) {
+                    if rec.prismatic { return; }
+                    rec.hand = hand;
+                }
+                self.wake_joint(joint_id);
+            }
             PhysicsCmd::JointSetMotor { joint_id, target_vel, max_force } => {
                 if !target_vel.is_finite() || !max_force.is_finite() || max_force < 0.0 {
                     return;
                 }
                 if let Some(rec) = self.joints.get_mut(&joint_id) {
-                    // the motor drives body2 relative to body1. on a world joint body1 is the part
-                    // itself, so the part turns the other way round than the target says
-                    if target_vel.abs() > 1.0 && max_force > 0.0 {
-                        rec.hand = target_vel.signum() * if rec.b == 0 { -1.0 } else { 1.0 };
-                    }
                     if let Some(j) = self.impulse_joints.get_mut(rec.handle, true) {
                         let axis = if rec.prismatic { JointAxis::LinX } else { JointAxis::AngX };
                         // damping IS the motor's torque per unit of speed error — hardcoding 1.0 meant a
@@ -576,6 +637,10 @@ impl KhysWorld {
                         // the motor saturates its allowance past 1 rad/s of error and eases off near the
                         // target instead of chattering across it.
                         j.data.set_motor_velocity(axis, target_vel, max_force.max(1.0));
+                        let spinner = if rec.b == 0 { rec.a } else { rec.b };
+                        let rotor = !rec.prismatic && self.kontras.get(&spinner).is_some_and(|k|
+                            k.wheel_axle.is_none() && k.aero.iter().any(|s| s.propeller > 0.0));
+                        j.data.set_motor_model(axis, if rotor { MotorModel::ForceBased } else { MotorModel::AccelerationBased });
                         j.data.set_motor_max_force(axis, max_force);
                     }
                 }
@@ -1161,10 +1226,35 @@ impl KhysWorld {
         base * curve * signed.signum()
     }
 
+    // Axial torque of the working blades alone, for a body turning at `ang`. Used twice per step with a
+    // nudged spin to read how steeply the blade load changes with RPM.
+    #[allow(clippy::too_many_arguments)]
+    fn blade_axial_torque(
+        aero: &[AeroSurface], qrot: Quat, local_com: Vec3, center: Vec3, lin: Vec3, ang: Vec3,
+        wind: Vec3, axis: Vec3, hand: f32, density: f32, extreme: bool,
+    ) -> f32 {
+        let mut torque = 0.0f32;
+        for s in aero {
+            if s.propeller <= 0.0 || s.area <= 0.0 { continue; }
+            let normal = if s.chunky { axis } else { qrot * s.normal };
+            let along = normal.dot(axis);
+            if along.abs() <= 0.97 { continue; }
+            let arm = qrot * (s.off - local_com);
+            let blade_arm = qrot * (s.off - center);
+            let radius = (blade_arm - axis * blade_arm.dot(axis)).length().max(0.25);
+            let incidence = (PROP_PITCH / radius).atan() * along.signum() * hand;
+            let force = Self::aero_panel_force(lin + ang.cross(arm) - wind, normal, s.area, s.cd, 2.0,
+                density, 1.0, extreme, None, 0.0, 1.0, incidence, s.propeller);
+            torque += arm.cross(force).dot(axis);
+        }
+        torque
+    }
+
     fn aero_panel_force(
         point_air_vel: Vec3, normal: Vec3, area: f32, cd: f32, cl: f32,
         density: f32, aspect_ratio: f32, extreme: bool,
         alpha_override: Option<f32>, separation: f32, induced_scale: f32, incidence: f32,
+        propeller: f32,
     ) -> Vec3 {
         let speed = point_air_vel.length();
         if speed < 0.05 || area <= 0.0 { return Vec3::ZERO; }
@@ -1200,6 +1290,35 @@ impl KhysWorld {
         let drag = -v_dir * (q * cd_eff);
         let lift_axis = n - v_dir * n.dot(v_dir);
         let lift = lift_axis.try_normalize().unwrap_or(Vec3::ZERO) * (q * cl_eff * lift_gain);
+        // A blade material's coefficient stands for blade area and airfoil a block cannot show: lift takes
+        // it in full, drag its square root. That makes a block prop far cleaner than a real one, and it
+        // has to be: mechanics dream's gravity is about three times real and block airframes drag hard,
+        // so with physically scaled blades (lift and drag both at the full gain) planes no longer left
+        // the ground. What stood planes on their tails was the disk's normal force, see side_gain
+        let blade_gain = if propeller > 0.0 { propeller / 2.0 } else { 1.0 };
+        let lift = lift * blade_gain;
+        let mut drag = drag * blade_gain.sqrt();
+        // Past stall a block blade is a flat plate, which cannot beat lift/drag = cot(angle). Only the
+        // angle that inflow adds beyond the blade's own twist counts, so the tuned polar at the design
+        // point stays. Without it the material gain made a stalled blade a near-perfect autorotor and
+        // air flowing in from the pressure side wound a prop up to the spin clamp, engine on or off.
+        // The same holds for a wing: a block surface past stall kept most of its lift with almost no drag,
+        // so a control surface swung into stall threw the plane around with several times the force a
+        // stalled plate gives and none of the drag that should slow it
+        // (extreme already models separation drag for wings, so there the floor stays on blades only)
+        if propeller > 0.0 || (cl > 0.0 && !extreme) {
+            let stall = if extreme { 0.26 } else { 0.30 };
+            let angle = (alpha + incidence).abs();
+            let design = incidence.abs().max(stall);
+            if angle > design {
+                let floor = lift.length() * angle.min(1.4).tan();
+                let have = drag.length();
+                if floor > have {
+                    let blend = ((angle - design) / 0.1).clamp(0.0, 1.0);
+                    drag = -v_dir * (have + (floor - have) * blend);
+                }
+            }
+        }
         let force = drag + lift;
         if force.is_finite() { force } else { Vec3::ZERO }
     }
@@ -1637,8 +1756,6 @@ impl KhysWorld {
         #[allow(non_snake_case)]
         let G: f32 = self.gravity.length();
         const RHO0: f32 = 0.08; // khysics mass scale, not kilograms
-        const SEA_Y: f32 = 64.0;
-        const SCALE_HEIGHT: f32 = 180.0;
 
         let wind = self.wind;
         let self_up = (-self.gravity).try_normalize().unwrap_or(Vec3::Y);
@@ -1646,6 +1763,8 @@ impl KhysWorld {
         // it is capped by what it is jointed to, not by its own four plates. world joints (b = 0) do
         // not count, a rotor on a static bearing is holding the planet
         let mut assembly_mass: HashMap<i64, f32> = HashMap::new();
+        // where the whole jointed machine balances: a tail on its own bearing is still a tail
+        let mut assembly_com: HashMap<i64, Vec3> = HashMap::new();
         {
             let mut parent: HashMap<i64, i64> = self.kontras.keys().map(|id| (*id, *id)).collect();
             fn root(parent: &mut HashMap<i64, i64>, mut id: i64) -> i64 {
@@ -1661,59 +1780,99 @@ impl KhysWorld {
                 if ra != rb { parent.insert(ra, rb); }
             }
             let mut totals: HashMap<i64, f32> = HashMap::new();
+            let mut moments: HashMap<i64, Vec3> = HashMap::new();
             for (id, k) in &self.kontras {
-                let m = self.bodies.get(k.body).map(|b| b.mass()).unwrap_or(0.0);
-                *totals.entry(root(&mut parent, *id)).or_insert(0.0) += m;
+                let (m, c) = self.bodies.get(k.body).map(|b| (b.mass(), b.center_of_mass())).unwrap_or((0.0, Vec3::ZERO));
+                let r = root(&mut parent, *id);
+                *totals.entry(r).or_insert(0.0) += m;
+                *moments.entry(r).or_insert(Vec3::ZERO) += c * m;
             }
             for id in self.kontras.keys() {
-                let total = totals.get(&root(&mut parent, *id)).copied().unwrap_or(0.0);
+                let r = root(&mut parent, *id);
+                let total = totals.get(&r).copied().unwrap_or(0.0);
                 assembly_mass.insert(*id, total);
+                if total > 0.0 { assembly_com.insert(*id, moments[&r] / total); }
             }
         }
-        // which way each spinning part pushes: along its bearing's axis, out of the bearing, whichever
-        // way it turns. blocks can't be twisted into a handed blade, so the thrust used to follow the
-        // spin: a counter-rotating pair pushed against each other and the plane went sideways, and a
-        // helicopter's counter-rotor pressed it into the ground. real counter-rotating props have
-        // mirrored blades for exactly this reason. the axis is in the frame of end a of the joint
+        // Bearing axes are expressed in end a's frame. Blade handedness stays fixed when the motor
+        // reverses, so opposite actual spins produce opposite axial thrust.
         let mut rotor_axis: HashMap<i64, (Vec3, f32)> = HashMap::new();
+        let mut rotor_centers: HashMap<i64, Vec3> = HashMap::new();
+        let mut rotor_relative_spin: HashMap<i64, f32> = HashMap::new();
+        let mut rotor_drive: HashMap<i64, (Vec3, f32, f32)> = HashMap::new();
+        // the body each rotor's motor reacts on (none for a rotor on a world bearing)
+        let mut rotor_parent: HashMap<i64, i64> = HashMap::new();
         for rec in self.joints.values() {
             if rec.prismatic { continue; }
             let spinner = if rec.b == 0 { rec.a } else { rec.b };
             let Some(frame) = self.kontras.get(&rec.a).and_then(|k| self.bodies.get(k.body)) else { continue };
             let r = frame.rotation();
-            rotor_axis.insert(spinner, (Quat::from_xyzw(r.x, r.y, r.z, r.w) * rec.axis, rec.hand));
+            let axis = Quat::from_xyzw(r.x, r.y, r.z, r.w) * rec.axis;
+            let parent_spin = if rec.b == 0 { Vec3::ZERO } else { frame.angvel() };
+            let Some(rotating) = self.kontras.get(&spinner).and_then(|k| self.bodies.get(k.body)) else { continue };
+            rotor_relative_spin.insert(spinner, (rotating.angvel() - parent_spin).dot(axis));
+            rotor_axis.insert(spinner, (axis, rec.hand));
+            if rec.b != 0 { rotor_parent.insert(spinner, rec.a); }
+            rotor_centers.insert(spinner, if rec.b == 0 { rec.anchor_a } else { rec.anchor_b });
+            if let Some(motor) = self.impulse_joints.get(rec.handle).and_then(|j| j.data.motor(JointAxis::AngX)) {
+                if motor.model == MotorModel::ForceBased && motor.stiffness == 0.0
+                    && motor.target_vel.abs() > 1.0 && motor.max_force > 0.0 {
+                    let direction = motor.target_vel.signum() * if rec.b == 0 { -1.0 } else { 1.0 };
+                    let parent_spin = if rec.b == 0 { Vec3::ZERO } else { frame.angvel() };
+                    let target = axis * direction * motor.target_vel.abs() + parent_spin;
+                    rotor_drive.insert(spinner, (target, motor.damping, motor.max_force));
+                }
+            }
         }
         let sections = &self.sections;
+        let prop_reaction = self.prop_reaction;
+        // part of each working rotor's drag torque handed back to the body its motor pushes against
+        let mut counter_torque: Vec<(i64, Vec3)> = Vec::new();
         let kontras = &mut self.kontras;
         let bodies = &mut self.bodies;
 
         for (kontra_id, k) in kontras.iter_mut() {
             let b = match bodies.get_mut(k.body) { Some(b) => b, None => continue };
             if b.is_sleeping() { continue; }
+            // local weather: eases toward what the game last said over about half a second, so a
+            // 20 Hz update or a gust never lands as a step in force
+            let wind = match k.wind_target {
+                Some(target) => {
+                    k.wind_now += (target - k.wind_now) * (dt / 0.5).min(1.0);
+                    k.wind_now
+                }
+                None => wind,
+            };
 
             let mass = b.mass().max(0.01);
             let cap_mass = assembly_mass.get(kontra_id).copied().unwrap_or(mass).max(mass);
             let r = b.rotation();
             let qrot = Quat::from_xyzw(r.x, r.y, r.z, r.w);
-            let t = b.translation();
+            // Rapier velocities and accumulated torque are measured at the center of mass.
+            let t = b.center_of_mass();
             let pos = Vec3::new(t.x, t.y, t.z);
+            let local_com = b.local_center_of_mass();
             let lv = b.linvel();
             let lin = Vec3::new(lv.x, lv.y, lv.z);
             let av = b.angvel();
             let ang = Vec3::new(av.x, av.y, av.z);
 
             let density_at = |y: f32| {
-                RHO0 * self.atmosphere_scale * (-(y - SEA_Y) / SCALE_HEIGHT).exp().clamp(0.001, 1.25)
+                let y = y + self.air_altitude_offset;
+                RHO0 * self.atmosphere_scale * self.air_density
+                    * (-(y - self.air_sea_level) / self.air_scale_height).exp().clamp(self.air_min_density, 1.25)
             };
             let mut net_force = Vec3::ZERO;
             let mut net_torque = Vec3::ZERO;
             let mut radius = 1.0f32;
             let mut wing_area = 0.0f32;
+            let mut wing_strength = 0.0f32;
             let mut wing_min = Vec3::splat(f32::INFINITY);
             let mut wing_max = Vec3::splat(f32::NEG_INFINITY);
             for s in &k.aero {
                 if s.cl <= 0.0 { continue; }
                 wing_area += s.area;
+                wing_strength += s.cl * s.area;
                 wing_min = wing_min.min(s.off);
                 wing_max = wing_max.max(s.off);
             }
@@ -1801,6 +1960,26 @@ impl KhysWorld {
                 }
             }
 
+            // the way the blades turn is the rotor's turn on its own bearing, not the whole body's spin.
+            // an airframe that rolls or yaws added its own rate in, so a slow prop on a turning plane
+            // tilted its "spin axis", dropped out of propeller mode or flipped its pitch
+            let rel_spin = rotor_relative_spin.get(kontra_id).copied().unwrap_or(0.0);
+            let blade_axis = match rotor_axis.get(kontra_id) {
+                Some(&(mount, _)) if rel_spin.abs() > 1.0 => mount * rel_spin.signum(),
+                _ => Vec3::ZERO,
+            };
+            // only a body whose blades actually work as a propeller this step has rotor drag to solve
+            let mut blades_working = false;
+            // what the material gain added to the blades' sideways resultant, taken back after the loop.
+            // the gain stands for blade area a block cannot show; a real blade that thin feels a crossflow
+            // like an ungained one, so the disk's normal force stays that of plain blocks. with the gain in,
+            // a prop ahead of the centre of mass outweighed any tail and stood the plane on its tail
+            let mut blade_side = Vec3::ZERO;
+            let side_gain = |force: Vec3, axis: Vec3, propeller: f32| -> Vec3 {
+                let gain = propeller / 2.0;
+                if gain <= 1.0 || axis == Vec3::ZERO { return Vec3::ZERO; }
+                (force - axis * force.dot(axis)) * (1.0 - gain.recip())
+            };
             match k.aero_mode {
                 AeroMode::Low => {
                     // Cheap arcade glide: one upward term, capped well below weight so it cannot hover.
@@ -1809,8 +1988,33 @@ impl KhysWorld {
                     let bulk = (k.block_offsets.len() as f32).cbrt().max(1.0);
                     net_force -= air_vel * (mass * (0.55 + speed * 0.045) + bulk * 0.18);
                     let horizontal_sq = air_vel.x * air_vel.x + air_vel.z * air_vel.z;
-                    net_force.y += (wing_area * horizontal_sq * 0.025).min(mass * G * 0.38);
+                    net_force.y += (wing_strength * horizontal_sq * 0.0125).min(mass * G * 0.38);
                     net_torque -= ang * (mass * 1.8);
+                    // Low keeps its lumped wing but still transfers motor power through propeller blades.
+                    if let Some(&(mount, hand)) = rotor_axis.get(kontra_id) {
+                        if blade_axis != Vec3::ZERO {
+                            let spin_axis = blade_axis;
+                            for surface in &k.aero {
+                                if surface.propeller <= 0.0 || surface.area <= 0.0 { continue; }
+                                let normal = if surface.chunky { mount } else { qrot * surface.normal };
+                                let along = normal.dot(spin_axis);
+                                if along.abs() <= 0.97 { continue; }
+                                let arm = qrot * (surface.off - local_com);
+                                radius = radius.max(arm.length());
+                                let blade_arm = qrot * (surface.off - rotor_centers[kontra_id]);
+                                let blade_radius = (blade_arm-mount*blade_arm.dot(mount)).length().max(0.25);
+                                let incidence = (PROP_PITCH/blade_radius).atan()*along.signum()*hand;
+                                let force = Self::aero_panel_force(
+                                    lin+ang.cross(arm)-wind, normal, surface.area, surface.cd, 2.0,
+                                    density_at(pos.y+arm.y), 1.0, false, None, 0.0, 1.0, incidence, surface.propeller,
+                                );
+                                net_force += force;
+                                net_torque += spin_axis * arm.cross(force).dot(spin_axis);
+                                blade_side += side_gain(force, spin_axis, surface.propeller);
+                                blades_working = true;
+                            }
+                        }
+                    }
                 }
                 AeroMode::Correct => {
                     let body_air = lin - wind;
@@ -1833,19 +2037,17 @@ impl KhysWorld {
                     // this used to be one averaged panel on the body's centre: a spinning rotor has its
                     // centre on the axis, so it felt no spin at all, and a wing tilted on a bearing
                     // got averaged back to flat. balloons are an envelope, handled further down
-                    // torque: only the part along the spin axis, i.e. the air resisting a spinning rotor.
-                    // Correct stays the forgiving model for pitch/roll (Extreme owns full CoP torque),
-                    // but without that axial drag a propeller's thrust looks like free energy and the
-                    // passive clamp below deletes it the moment the plane starts moving
+                    // Propeller blades keep axial drag; bearing-mounted wings retain their moments.
                     let spin = ang.length();
-                    let spin_axis = if spin > 1.0 { ang / spin } else { Vec3::ZERO };
+                    let spin_axis = if blade_axis != Vec3::ZERO { blade_axis }
+                        else if spin > 1.0 { ang / spin } else { Vec3::ZERO };
                     let mut spin_torque = 0.0f32;
                     let rotor = rotor_axis.get(kontra_id).map(|r| r.0);
                     let hand = rotor_axis.get(kontra_id).map_or(1.0, |r| r.1);
                     for s in &k.aero {
                         if s.buoy > 0.0 && s.cl <= 0.0 { continue; }
                         if s.area <= 0.0 { continue; }
-                        let arm = qrot * s.off;
+                        let arm = qrot * (s.off - local_com);
                         radius = radius.max(arm.length());
                         let point_vel = lin + ang.cross(arm) - wind;
                         // a plate lying flat in the plane it spins in is a propeller blade. blocks
@@ -1857,7 +2059,7 @@ impl KhysWorld {
                         // is how everyone builds a prop out of cubes. as local up it was a paddle
                         // that only fought the motor. a slow one (a flap on a bearing) stays a wing
                         let normal = match rotor {
-                            Some(mount) if s.chunky && ang.dot(mount).abs() > 5.0 => mount,
+                            Some(mount) if s.chunky && rotor_relative_spin[kontra_id].abs() > 5.0 => mount,
                             _ => qrot * s.normal,
                         };
                         let along = normal.dot(spin_axis);
@@ -1865,36 +2067,48 @@ impl KhysWorld {
                         // radius so every piece of it runs out of pull at the same forward speed,
                         // PROP_PITCH blocks per radian of spin. a flat 0.2 rad plate one block out ran
                         // out at ~12 m/s, slower than any wing needs, so nothing ever took off
+                        let propelling = rotor.is_some() && rotor_relative_spin[kontra_id].abs() > 1.0
+                            && along.abs() > 0.97 && s.propeller > 0.0;
+                        // tailplane decalage: a surface well behind the machine's centre of mass along the
+                        // flight path flies a bit flatter than the wing. with both at the same angle a flat
+                        // tail trims the plane at zero lift and it just dives. measured from the whole
+                        // jointed machine: a tail elevator on its own bearing got wing incidence before
+                        // and pressed the nose down whatever the stick said
+                        let behind = if body_speed > 1.0 {
+                            (pos + arm - assembly_com.get(kontra_id).copied().unwrap_or(pos)).dot(body_air / body_speed)
+                        } else { 0.0 };
+                        let surface_angle = if behind < -1.5 { -0.02 } else { 0.06 };
                         let incidence = match rotor {
                             // a fin or any upright surface gets no built-in angle, that was a constant
                             // sideways push and the plane slowly turned off course
                             None if normal.dot(self_up).abs() < 0.7 => 0.0,
-                            None => {
-                                // tailplane decalage: a surface well behind the centre of mass along the
-                                // flight path flies a bit flatter than the wing. with both at the same
-                                // angle a flat tail trims the plane at zero lift and it just dives. a real
-                                // tail is set lower for exactly this, blocks can't be tilted by 2 degrees
-                                let behind = if body_speed > 1.0 { arm.dot(body_air / body_speed) } else { 0.0 };
-                                if behind < -1.5 { -0.02 } else { 0.06 }
-                            }
-                            Some(_) if spin <= 1.0 => 0.06,
+                            None => surface_angle,
+                            Some(_) if !propelling => if normal.dot(self_up).abs() < 0.7 { 0.0 } else { surface_angle },
                             Some(_) if along.abs() > 0.97 => {
                                 // twisted for the way the motor drives it: turning that way it pushes
                                 // out of its bearing, dragged the other way it pushes back in
-                                let radius = (arm - spin_axis * arm.dot(spin_axis)).length().max(0.25);
+                                let blade_arm = qrot * (s.off - rotor_centers[kontra_id]);
+                                let mount = rotor.unwrap();
+                                let radius = (blade_arm - mount * blade_arm.dot(mount)).length().max(0.25);
                                 (PROP_PITCH / radius).atan() * along.signum() * hand
                             }
                             Some(_) => 0.0,
                         };
                         let force = Self::aero_panel_force(
-                            point_vel, normal, s.area, s.cd, s.cl,
+                            point_vel, normal, s.area, s.cd,
+                            if propelling { 2.0 } else { s.cl },
                             density_at(pos.y + arm.y), aspect_ratio, false, None, 0.0, 1.0, incidence,
+                            if propelling { s.propeller } else { 0.0 },
                         );
                         net_force += force;
                         // an airframe feels every panel's lever arm: the tail keeps the nose into the
                         // wind and an elevator on a bearing can lift it. a rotor keeps only the drag
                         // about its own axle, its blades' off-axis pulls cancel round the turn anyway
-                        if rotor.is_some() { spin_torque += arm.cross(force).dot(spin_axis); }
+                        if propelling {
+                            spin_torque += arm.cross(force).dot(spin_axis);
+                            blade_side += side_gain(force, spin_axis, s.propeller);
+                            blades_working = true;
+                        }
                         else { net_torque += arm.cross(force); }
                     }
                     net_torque += spin_axis * spin_torque;
@@ -1905,8 +2119,10 @@ impl KhysWorld {
                     // of its torque along the axle is kept. without them a propeller of full blocks was a
                     // stack of flat plates facing up: next to no pull, and a wobble that turned the plane
                     let spin = ang.length();
-                    let spin_axis = if spin > 1.0 { ang / spin } else { Vec3::ZERO };
+                    let spin_axis = if blade_axis != Vec3::ZERO { blade_axis }
+                        else if spin > 1.0 { ang / spin } else { Vec3::ZERO };
                     let rotor = rotor_axis.get(kontra_id).map(|r| r.0);
+                    let spinning_rotor = rotor.is_some() && rotor_relative_spin[kontra_id].abs() > 5.0;
                     let hand = rotor_axis.get(kontra_id).map_or(1.0, |r| r.1);
                     let mut spin_torque = 0.0f32;
                     const FACE_DIRS: [([i32; 3], Vec3); 6] = [
@@ -1914,9 +2130,13 @@ impl KhysWorld {
                         ([0, 1, 0], Vec3::Y), ([0, -1, 0], Vec3::NEG_Y),
                         ([0, 0, 1], Vec3::Z), ([0, 0, -1], Vec3::NEG_Z),
                     ];
+                    // a spinning rotor's blocks are blades, which the blade panels below already treat as
+                    // thin airfoils. pressing on their faces like a brick's added a bluff disk's drag that
+                    // ate the thrust: in extreme a prop pulled backwards at 28 b/s and no plane climbed
                     for off in &k.block_offsets {
+                        if spinning_rotor { break; }
                         let key = [jround(off[0]), jround(off[1]), jround(off[2])];
-                        let arm = qrot * Vec3::from(*off);
+                        let arm = qrot * (Vec3::from(*off) - local_com);
                         radius = radius.max(arm.length());
                         let point_vel = lin + ang.cross(arm) - wind;
                         let rho = density_at(pos.y + arm.y);
@@ -1932,7 +2152,7 @@ impl KhysWorld {
                             let force = pressure + skin;
                             if force.is_finite() {
                                 net_force += force;
-                                if rotor.is_some() { spin_torque += arm.cross(force).dot(spin_axis); }
+                                if spinning_rotor { spin_torque += arm.cross(force).dot(spin_axis); }
                                 else { net_torque += arm.cross(force); }
                             }
                         }
@@ -1941,10 +2161,10 @@ impl KhysWorld {
                     let (surfaces, states) = (&k.aero, &mut k.aero_state);
                     for (index, s) in surfaces.iter().enumerate() {
                         let normal = match rotor {
-                            Some(mount) if s.chunky && ang.dot(mount).abs() > 5.0 => mount,
+                            Some(mount) if s.chunky && rotor_relative_spin[kontra_id].abs() > 5.0 => mount,
                             _ => (qrot * s.normal).try_normalize().unwrap_or(Vec3::Y),
                         };
-                        let base_arm = qrot * s.off;
+                        let base_arm = qrot * (s.off - local_com);
                         let base_vel = lin + ang.cross(base_arm) - wind;
                         let instant_alpha = if base_vel.length_squared() > 1.0e-5 {
                             let dir = base_vel.normalize();
@@ -2001,27 +2221,56 @@ impl KhysWorld {
                         // Split left/right wing halves share their chord station and remain main wings.
                         // A smaller region well fore/aft becomes a stabilizer with a little downforce.
                         let along = normal.dot(spin_axis);
+                        let propelling = rotor.is_some() && rotor_relative_spin[kontra_id].abs() > 1.0
+                            && along.abs() > 0.97 && s.propeller > 0.0;
+                        // a stabilizer is a smaller region well fore/aft of the main wing ON THIS BODY, or, as in
+                        // correct, a surface well behind the body's centre along the flight path. a plane whose
+                        // wings sit on their own jointed bodies has only the tailplane on its fuselage, and that
+                        // tailplane was taken for the main wing: wing incidence on the tail and a dive
+                        let body_air = lin - wind;
+                        let behind = if body_air.length() > 1.0 {
+                            (pos + base_arm - assembly_com.get(kontra_id).copied().unwrap_or(pos)).dot(body_air.normalize())
+                        } else { 0.0 };
+                        let stabilizer = (cluster_chord - main_chord).abs() > 1.5 || behind < -1.5;
                         let incidence = match rotor {
-                            None => if (cluster_chord - main_chord).abs() > 1.5 { -0.055 } else { 0.06 },
-                            Some(_) if spin <= 1.0 => 0.06,
+                            None => if stabilizer { -0.055 } else { 0.06 },
+                            Some(_) if !propelling => if normal.dot(self_up).abs() < 0.7 { 0.0 }
+                                else if behind < -1.5 { -0.055 } else { 0.06 },
                             Some(_) if along.abs() > 0.97 => {
-                                let blade_radius = (arm - spin_axis * arm.dot(spin_axis)).length().max(0.25);
+                                let blade_arm = qrot * (s.off - rotor_centers[kontra_id]);
+                                let mount = rotor.unwrap();
+                                let blade_radius = (blade_arm - mount * blade_arm.dot(mount)).length().max(0.25);
                                 (PROP_PITCH / blade_radius).atan() * along.signum() * hand
                             }
                             Some(_) => 0.0,
                         };
                         let force = Self::aero_panel_force(
-                            point_vel, normal, s.area * elliptic, s.cd, s.cl,
+                            point_vel, normal, s.area * elliptic, s.cd,
+                            if propelling { 2.0 } else { s.cl },
                             density_at(pos.y + arm.y), panel_aspect, true,
-                            Some(state.alpha), state.separation, induced_scale, incidence,
+                            // the lagged angle is a wing's dynamic stall. a blade sweeps round fifty times a
+                            // second and spun up into its own lag: the prop chattered between 0 and 46 rad/s
+                            if propelling { None } else { Some(state.alpha) }, state.separation, induced_scale, incidence,
+                            if propelling { s.propeller } else { 0.0 },
                         );
                         net_force += force;
-                        if rotor.is_some() { spin_torque += arm.cross(force).dot(spin_axis); }
+                        if propelling {
+                            spin_torque += arm.cross(force).dot(spin_axis);
+                            blade_side += side_gain(force, spin_axis, s.propeller);
+                            blades_working = true;
+                        }
                         else { net_torque += arm.cross(force); }
                     }
                     net_torque += spin_axis * spin_torque;
                 }
             }
+
+            // The material gain is there for thrust and the drag the motor pays, both taken per blade above.
+            // The sideways resultant of a disk meeting the air at an angle is only the asymmetry between
+            // blades, and multiplying it by the full lift gain made a nine block prop push sideways as
+            // hard as a whole wing: 36% of its thrust at 8 degrees, a canard on the nose that looped every
+            // tractor plane. It keeps the gain profile drag gets, about thrust times angle like a real prop
+            net_force -= blade_side;
 
             // Balloon blocks are a bulky envelope, not a flat wing. This damps vertical bobbing and
             // sideways drift without inventing a fake stabilizing force.
@@ -2037,7 +2286,7 @@ impl KhysWorld {
                 balloon_center += s.off * s.area;
             }
             if balloon_area > 0.0 {
-                let arm = qrot * (balloon_center / balloon_area);
+                let arm = qrot * (balloon_center / balloon_area - local_com);
                 radius = radius.max(arm.length());
                 let envelope_vel = lin + ang.cross(arm) - wind;
                 let speed = envelope_vel.length();
@@ -2063,6 +2312,62 @@ impl KhysWorld {
                 }
             }
 
+            // A light rotor's blade load changes steeply with RPM. Applied explicitly it overshoots every
+            // step and the prop flips between two speeds (54/66, 39/105 rad/s): the thrust shakes and a
+            // windmilling prop never settles. Integrate the axial part linearly implicit instead: read
+            // the slope dτ/dω from a second look at the blades with a nudged spin and take the step the
+            // end-of-step load allows. Only a stabilising slope is used, it can never add energy.
+            if blades_working && rel_spin.abs() > 1.0 {
+                if let Some(&(_, hand)) = rotor_axis.get(kontra_id) {
+                    // the turning direction's own axis: spin is positive along it and the blade twist
+                    // is read the same way the force loop above reads it
+                    let axis = blade_axis;
+                    let center = rotor_centers[kontra_id];
+                    let extreme = k.aero_mode == AeroMode::Extreme;
+                    let rho = density_at(pos.y);
+                    let nudge = (rel_spin.abs() * 0.02).max(0.5);
+                    let base = Self::blade_axial_torque(&k.aero, qrot, local_com, center, lin, ang,
+                        wind, axis, hand, rho, extreme);
+                    let nudged = Self::blade_axial_torque(&k.aero, qrot, local_com, center, lin,
+                        ang + axis * nudge, wind, axis, hand, rho, extreme);
+                    // a rising slope is left explicit: it is the stalled blade braking harder as it slows,
+                    // which the zero guard below keeps from overshooting
+                    let slope = ((nudged - base) / nudge).min(0.0);
+                    let inv_inertia = axis.dot(b.mass_properties().effective_world_inv_inertia * axis);
+                    if inv_inertia > 0.0 {
+                        // end-of-step spin with the blades linearised and the engine's velocity motor
+                        // (target, torque per rad/s, torque cap) acting on the same axis. at a steady
+                        // speed the correction is zero, so the real load is untouched
+                        let spin = ang.dot(axis);
+                        let (target, damping, max_force) = rotor_drive.get(kontra_id)
+                            .map_or((0.0, 0.0, 0.0), |d| (d.0.dot(axis), d.1, d.2));
+                        let along = net_torque.dot(axis);
+                        let rate = (inv_inertia * dt).recip();
+                        let residual = |next: f32| {
+                            let motor = (damping * (target - next)).clamp(-max_force, max_force);
+                            rate * (next - spin) - along - slope * (next - spin) - motor
+                        };
+                        let reach = along.abs() * inv_inertia * dt + max_force * inv_inertia * dt + 1.0;
+                        let (mut low, mut high) = (spin - reach, spin + reach);
+                        for _ in 0..30 {
+                            let mid = 0.5 * (low + high);
+                            if residual(mid) > 0.0 { high = mid; } else { low = mid; }
+                        }
+                        // the blade twist follows the spin's sign, so the linear model ends at zero. it may
+                        // brake the prop to a stop, never carry it through into the other direction
+                        let next = 0.5 * (low + high);
+                        // the blade load that lands the rotor on that end-of-step speed
+                        let blades = if next * spin < 0.0 {
+                            let motor = (damping * target).clamp(-max_force, max_force);
+                            -rate * spin - motor
+                        } else {
+                            along + slope * (next - spin)
+                        };
+                        net_torque += axis * (blades - along);
+                    }
+                }
+            }
+
             let force_cap = cap_mass * G * 12.0;
             let torque_cap = cap_mass * G * radius * 8.0;
             let aero_scale = (force_cap / net_force.length().max(force_cap))
@@ -2075,7 +2380,7 @@ impl KhysWorld {
             for s in &k.aero {
                 let capacity = s.buoy * s.area;
                 if capacity <= 0.0 { continue; }
-                let arm = qrot * s.off;
+                let arm = qrot * (s.off - local_com);
                 let force = G * capacity * (density_at(pos.y + arm.y) / RHO0);
                 buoy_force += force;
                 buoy_center += arm * force;
@@ -2095,6 +2400,25 @@ impl KhysWorld {
             net_torque *= final_scale;
             if net_force.is_finite() { b.add_force(net_force, true); }
             if net_torque.is_finite() { b.add_torque(net_torque, true); }
+            // the motor turns the prop against this drag and pushes the airframe the other way just as
+            // hard. game props turn several times slower than real ones for the same power, so that
+            // reaction is several times larger than on a real aircraft and ate half the ailerons.
+            // prop_reaction keeps that share of it (1 = all); the rest is handed back to the airframe
+            // only while the motor really drives the prop its own way: an unpowered prop has no motor
+            // reaction to soften, and the hand-back never exceeds what the motor can push
+            if prop_reaction < 1.0 && blades_working && blade_axis != Vec3::ZERO {
+                if let (Some(&parent), Some(&(target, _, max_force))) = (rotor_parent.get(kontra_id), rotor_drive.get(kontra_id)) {
+                    let load = (-net_torque.dot(blade_axis)).clamp(0.0, max_force);
+                    if target.dot(blade_axis) > 0.0 && load.is_finite() {
+                        counter_torque.push((parent, blade_axis * load * (1.0 - prop_reaction)));
+                    }
+                }
+            }
+        }
+        for (parent, torque) in counter_torque {
+            if let Some(b) = kontras.get(&parent).and_then(|k| bodies.get_mut(k.body)) {
+                b.add_torque(torque, true);
+            }
         }
     }
 
@@ -2303,6 +2627,8 @@ impl KhysWorld {
             pushed: false,
             buoy_scale: 1.0,
             submerged: 0.0,
+            wind_target: None,
+            wind_now: Vec3::ZERO,
         });
     }
 
@@ -2362,6 +2688,8 @@ impl KhysWorld {
             pushed: false,
             buoy_scale: 1.0,
             submerged: 0.0,
+            wind_target: None,
+            wind_now: Vec3::ZERO,
         });
     }
 
@@ -2397,9 +2725,8 @@ impl KhysWorld {
     pub fn set_block_mass(&mut self, id: i64, offset: [f32; 3], mass: f32) {
         if !mass.is_finite() { return; }
         let Some(k) = self.kontras.get(&id) else { return };
-        let key = [jround(offset[0]), jround(offset[1]), jround(offset[2])];
         let Some(idx) = k.block_offsets.iter().position(|o|
-            [jround(o[0]), jround(o[1]), jround(o[2])] == key) else { return };
+            *o == offset) else { return };
         let (handle, body) = (k.colliders[idx], k.body);
         if let Some(c) = self.colliders.get_mut(handle) { c.set_mass(mass.max(0.01)); }
         if let Some(b) = self.bodies.get_mut(body) { b.wake_up(true); }
@@ -2493,7 +2820,13 @@ impl KhysWorld {
 
     pub fn set_block_materials(&mut self, id: i64, materials: &[[f32; 15]]) {
         let Some(k) = self.kontras.get_mut(&id) else { return };
-        if materials.len() != k.colliders.len() { return; }
+        // a skipped push leaves every collider on its old material: a stone slot can stay a
+        // disabled liquid slot and nothing physical collides with that block any more
+        if materials.len() != k.colliders.len() {
+            eprintln!("[Khysics] ERROR block materials not applied: kontra {} sent {} materials for {} colliders, collision of its blocks is wrong",
+                id, materials.len(), k.colliders.len());
+            return;
+        }
 
         // Java's LinkedHashMap keeps insertion order while collider removal uses swap_remove.
         // Put both Rust arrays back into the wire order before applying per-block shapes.
@@ -2503,10 +2836,14 @@ impl KhysWorld {
         let mut reordered_colliders = Vec::with_capacity(materials.len());
         let mut used = vec![false; old_offsets.len()];
         for material in materials {
-            let key = [jround(material[12]), jround(material[13]), jround(material[14])];
+            let key = [material[12], material[13], material[14]];
             let Some(index) = old_offsets.iter().enumerate().position(|(index, offset)|
-                !used[index] && [jround(offset[0]), jround(offset[1]), jround(offset[2])] == key)
-            else { return };
+                !used[index] && *offset == key)
+            else {
+                eprintln!("[Khysics] ERROR block materials not applied: kontra {} has no collider at offset {:?}, collision of its blocks is wrong",
+                    id, key);
+                return;
+            };
             used[index] = true;
             reordered_offsets.push(old_offsets[index]);
             reordered_colliders.push(old_colliders[index]);
@@ -2772,12 +3109,20 @@ impl KhysWorld {
         };
         let idx = match idx { Some(i) => i, None => return false };
 
+        self.remove_block_at_index(kontra_id, idx)
+    }
+
+    fn remove_block_at_index(&mut self, kontra_id: i64, idx: usize) -> bool {
+
         // pull just this block's collider + its parallel offset; the rest keep their contacts → no twitch
         let removed = {
             let k = self.kontras.get_mut(&kontra_id).unwrap();
-            k.block_offsets.swap_remove(idx);
-            k.block_set.remove(&local);
-            k.buoy_volumes.remove(&local);
+            let offset = k.block_offsets.swap_remove(idx);
+            let local = [jround(offset[0]), jround(offset[1]), jround(offset[2])];
+            if !k.block_offsets.iter().any(|o| [jround(o[0]), jround(o[1]), jround(o[2])] == local) {
+                k.block_set.remove(&local);
+                k.buoy_volumes.remove(&local);
+            }
             k.colliders.swap_remove(idx)
         };
         self.colliders.remove(removed, &mut self.islands, &mut self.bodies, false);
@@ -2826,6 +3171,12 @@ impl KhysWorld {
             self.pending_splits.push((kontra_id, far_split));
         }
         true
+    }
+
+    pub fn remove_block_at_exact_offset(&mut self, kontra_id: i64, offset: [f32; 3]) -> bool {
+        let Some(index) = self.kontras.get(&kontra_id)
+            .and_then(|k| k.block_offsets.iter().position(|o| *o == offset)) else { return false };
+        self.remove_block_at_index(kontra_id, index)
     }
 
     pub fn raycast(&self, origin: [f32; 3], dir: [f32; 3], max_dist: f32) -> Option<(i64, [f32; 3])> {
@@ -2989,7 +3340,7 @@ mod aero_tests {
             normal: Vec3::Y,
             area: 1.0,
             cd: 0.8,
-            cl: 2.0,
+            cl: 2.0, propeller: 2.0,
             buoy: 0.0,
             chunky: false,
         }
@@ -3079,7 +3430,7 @@ mod aero_tests {
                 normal: Vec3::Y,
                 area: 1.0,
                 cd: 0.47,
-                cl: 0.0,
+                cl: 0.0, propeller: 0.0,
                 buoy: 20.0,
                 chunky: false,
             });
@@ -3552,6 +3903,7 @@ mod aero_tests {
         let v3 = |v: &serde_json::Value| [f(&v[0]), f(&v[1]), f(&v[2])];
         let mut world = KhysWorld::new();
         world.gravity = Vec3::new(0.0, f(&scene["gravity"]), 0.0);
+        world.air_altitude_offset = f(&scene["altitude"]);
         let bodies = scene["bodies"].as_array().expect("bodies");
         if let Some(cells) = scene["terrain"].as_array() {
             // the terrain the game had around the build, block by block
@@ -3588,6 +3940,20 @@ mod aero_tests {
             let raw: Vec<f32> = body["shapes"].as_array().unwrap().iter().map(|m| f(m)).collect();
             let shapes: Vec<[f32; 11]> = raw.chunks_exact(11).map(|c| c.try_into().unwrap()).collect();
             if !shapes.is_empty() { world.set_block_shapes(id, &shapes); }
+            if let Some(raw) = body["aero_geometry"].as_array() {
+                let raw: Vec<f32> = raw.iter().map(|v| f(v)).collect();
+                let pieces = raw.chunks_exact(14).map(|p| aero_geometry::AeroPiece {
+                    surface: AeroSurface {
+                        off: Vec3::new(p[0], p[1], p[2]), normal: Vec3::new(p[3], p[4], p[5]),
+                        area: p[6], cd: p[7], cl: p[8], buoy: p[9], propeller: p[10], chunky: false,
+                    },
+                    size: Vec3::new(p[11], p[12], p[13]),
+                }).collect();
+                world.process_cmd(PhysicsCmd::SetAero { id, surfaces: aero_geometry::panels(pieces) });
+            }
+            if let Some(mode) = body["aero_mode"].as_i64() {
+                world.process_cmd(PhysicsCmd::SetAeroMode { id, mode: AeroMode::from_i32(mode as i32) });
+            }
         }
         let joints = scene["joints"].as_array().expect("joints");
         for joint in joints {
@@ -3600,6 +3966,9 @@ mod aero_tests {
             });
             if let Some(l) = joint["limits"].as_array() {
                 world.process_cmd(PhysicsCmd::JointSetLimits { joint_id, min: f(&l[0]), max: f(&l[1]) });
+            }
+            if joint["blade_hand"].as_f64() == Some(-1.0) {
+                world.process_cmd(PhysicsCmd::JointSetBladeHandedness { joint_id, hand: -1.0 });
             }
             world.process_cmd(PhysicsCmd::JointSetMotor { joint_id, target_vel: f(&joint["motor_vel"]), max_force: f(&joint["motor_force"]) });
             // KOPER_SCENE_MOTOR=vel:force switches the drive on the way mechanics dream does, for a
@@ -3621,12 +3990,137 @@ mod aero_tests {
                 b.set_angvel(Vec3::from(v3(&body["angvel"])), true);
             }
         }
+        // KOPER_SCENE_BETA=1: static directional stability. every body flies the chassis velocity turned
+        // by a sideslip angle, no rotation, and the aerodynamic yaw moment about the assembly's centre of
+        // mass is split per body. a stable airframe turns its nose into the slip (moment against the angle)
+        if std::env::var("KOPER_SCENE_BETA").is_ok() {
+            // KOPER_SCENE_NOFIN: drop every upright lifting panel (a fin) from the biggest body first
+            if std::env::var("KOPER_SCENE_NOFIN").is_ok() {
+                let biggest = bodies.iter().max_by_key(|b| b["offsets"].as_array().map_or(0, |o| o.len()))
+                    .and_then(|b| b["id"].as_i64()).unwrap();
+                let k = world.kontras.get_mut(&biggest).unwrap();
+                let before = k.aero.len();
+                k.aero.retain(|s| !(s.cl > 0.0 && s.normal.y.abs() < 0.5));
+                eprintln!("NOFIN removed {} of {} panels", before - k.aero.len(), before);
+            }
+            let first = bodies.iter().max_by_key(|b| b["offsets"].as_array().map_or(0, |o| o.len()))
+                .and_then(|b| b["id"].as_i64()).unwrap();
+            let chassis = world.bodies.get(world.kontras[&first].body).unwrap().clone();
+            let v0 = Vec3::from(v3(&bodies.iter().find(|b| b["id"].as_i64() == Some(first)).unwrap()["linvel"]));
+            let up = chassis.rotation() * Vec3::Y;
+            let ids: Vec<i64> = world.kontras.keys().copied().collect();
+            for deg in [-10.0f32, -5.0, 0.0, 5.0, 10.0] {
+                let turn = Quat::from_axis_angle(up, deg.to_radians());
+                for id in &ids {
+                    let h = world.kontras[id].body;
+                    let b = world.bodies.get_mut(h).unwrap();
+                    b.set_linvel(turn * v0, true);
+                    b.set_angvel(Vec3::ZERO, true);
+                    b.reset_forces(false); b.reset_torques(false);
+                }
+                world.apply_aero(1.0 / 60.0);
+                let total: f32 = ids.iter().map(|id| world.bodies.get(world.kontras[id].body).unwrap().mass()).sum();
+                let center = ids.iter().fold(Vec3::ZERO, |sum, id| { let b = world.bodies.get(world.kontras[id].body).unwrap(); sum + b.center_of_mass() * b.mass() }) / total;
+                let mut parts = String::new();
+                let mut sum = 0.0;
+                for id in &ids {
+                    let b = world.bodies.get(world.kontras[id].body).unwrap();
+                    let m = (b.user_torque() + (b.center_of_mass() - center).cross(b.user_force())).dot(up);
+                    sum += m;
+                    if m.abs() > 20.0 { parts += &format!(" {id}:{m:.0}"); }
+                }
+                let nose = chassis.rotation() * Vec3::X;
+                let mut roll_parts = String::new();
+                let mut roll_sum = 0.0;
+                for id in &ids {
+                    let b = world.bodies.get(world.kontras[id].body).unwrap();
+                    let m = (b.user_torque() + (b.center_of_mass() - center).cross(b.user_force())).dot(nose);
+                    roll_sum += m;
+                    if m.abs() > 20.0 { roll_parts += &format!(" {id}:{m:.0}"); }
+                }
+                eprintln!("BETA {deg:+} yaw={sum:.0}{parts} | roll={roll_sum:.0}{roll_parts}");
+            }
+            return;
+        }
+        // KOPER_SCENE_ALPHA: static pitch stability. every body flies the chassis speed along the nose,
+        // turned up by an angle of attack, no rotation; lift and the pitch moment about the assembly's
+        // centre of mass are split per body. a stable airframe pitches nose down as the angle grows
+        if std::env::var("KOPER_SCENE_ALPHA").is_ok() {
+            let first = bodies.iter().max_by_key(|b| b["offsets"].as_array().map_or(0, |o| o.len()))
+                .and_then(|b| b["id"].as_i64()).unwrap();
+            let chassis = world.bodies.get(world.kontras[&first].body).unwrap().clone();
+            let v0 = Vec3::from(v3(&bodies.iter().find(|b| b["id"].as_i64() == Some(first)).unwrap()["linvel"]));
+            let nose_local = if std::env::var("KOPER_SCENE_NOSE").map_or(false, |v| v == "x") { Vec3::X } else { Vec3::Z };
+            let nose = chassis.rotation() * nose_local;
+            let up = chassis.rotation() * Vec3::Y;
+            // positive about this axis lifts the nose
+            let pitch_axis = nose.cross(up);
+            let speed = std::env::var("KOPER_SCENE_SPEED").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(v0.length());
+            let ids: Vec<i64> = world.kontras.keys().copied().collect();
+            for deg in [-6.0f32, -3.0, 0.0, 3.0, 6.0, 9.0, 12.0, 15.0] {
+                let flow = Quat::from_axis_angle(pitch_axis, -deg.to_radians()) * nose * speed;
+                for id in &ids {
+                    let h = world.kontras[id].body;
+                    let b = world.bodies.get_mut(h).unwrap();
+                    b.set_linvel(flow, true);
+                    b.set_angvel(Vec3::ZERO, true);
+                    b.reset_forces(false); b.reset_torques(false);
+                }
+                world.apply_aero(1.0 / 60.0);
+                let total: f32 = ids.iter().map(|id| world.bodies.get(world.kontras[id].body).unwrap().mass()).sum();
+                let center = ids.iter().fold(Vec3::ZERO, |sum, id| { let b = world.bodies.get(world.kontras[id].body).unwrap(); sum + b.center_of_mass() * b.mass() }) / total;
+                let lift_dir = flow.normalize().cross(pitch_axis).normalize();
+                let lift_dir = if lift_dir.dot(up) < 0.0 { -lift_dir } else { lift_dir };
+                let mut parts = String::new();
+                let (mut sum, mut lift) = (0.0, 0.0);
+                for id in &ids {
+                    let b = world.bodies.get(world.kontras[id].body).unwrap();
+                    let m = (b.user_torque() + (b.center_of_mass() - center).cross(b.user_force())).dot(pitch_axis);
+                    let l = b.user_force().dot(lift_dir);
+                    sum += m; lift += l;
+                    if m.abs() > 20.0 || l.abs() > 50.0 {
+                        parts += &format!(" {id}:M{m:.0}/L{l:.0}/D{:.0}@{:.2}", -b.user_force().dot(flow.normalize()), (b.center_of_mass() - center).dot(nose));
+                    }
+                }
+                eprintln!("ALPHA {deg:+} v={speed:.1} lift={lift:.0} weight={:.0} noseUp={sum:.0}{parts}", total * 9.81);
+            }
+            return;
+        }
+        if std::env::var("KOPER_SCENE_AERO_ONLY").is_ok() {
+            let total_mass: f32 = world.bodies.iter().map(|(_, b)| b.mass()).sum();
+            let center = world.bodies.iter().fold(Vec3::ZERO, |sum, (_, b)|
+                sum + b.center_of_mass() * b.mass()) / total_mass;
+            world.apply_aero(1.0 / 60.0);
+            let mut total_force = Vec3::ZERO;
+            let mut total_torque = Vec3::ZERO;
+            for body in bodies {
+                let id = body["id"].as_i64().unwrap();
+                let b = world.bodies.get(world.kontras[&id].body).unwrap();
+                let force = b.user_force();
+                let torque = b.user_torque() + (b.center_of_mass() - center).cross(force);
+                total_force += force;
+                total_torque += torque;
+                eprintln!("SCENE AERO body={id} normal={:?} mass={} force={force:?} assembly_torque={torque:?}",
+                    b.rotation() * Vec3::Y, b.mass());
+            }
+            eprintln!("SCENE AERO total mass={total_mass} center={center:?} force={total_force:?} torque={total_torque:?}");
+            return;
+        }
         // the body with the most blocks is the chassis; the others are what hangs off it
         let first = bodies.iter().max_by_key(|b| b["offsets"].as_array().map_or(0, |o| o.len()))
             .and_then(|b| b["id"].as_i64()).unwrap();
         let joint_ids: Vec<i64> = joints.iter().map(|j| j["id"].as_i64().unwrap()).collect();
         let resend = std::env::var("KOPER_SCENE_RESEND").is_ok();
         let reupload = std::env::var("KOPER_SCENE_REUPLOAD").is_ok();
+        // KOPER_SCENE_MODE=low|correct|extreme: every body in that aero mode; KOPER_SCENE_TIME: time the run
+        if let Ok(mode) = std::env::var("KOPER_SCENE_MODE") {
+            let mode = match mode.as_str() { "low" => AeroMode::Low, "extreme" => AeroMode::Extreme, _ => AeroMode::Correct };
+            for k in world.kontras.values_mut() { k.aero_mode = mode; }
+        }
+        let timer = std::time::Instant::now();
+        // KOPER_SCENE_NO_AERO: the same scene with the air switched off, to split aerodynamics from
+        // joints, wheels and ground
+        if std::env::var("KOPER_SCENE_NO_AERO").is_ok() { world.atmosphere_scale = 0.0; }
         for i in 0..240 {
             // the game re-sends every motor once per server tick, three physics steps apart
             if resend && i % 3 == 0 {
@@ -3644,13 +4138,94 @@ mod aero_tests {
                 } }
             }
             world.step(1.0 / 60.0);
-            if i % 20 == 0 {
-                let c = world.bodies.get(world.kontras[&first].body).unwrap();
+            if i % 10 == 0 {
+                let c = world.bodies.get(world.kontras[&first].body).unwrap().clone();
                 let snap = world.build_snapshot();
                 let wheels: Vec<String> = joint_ids.iter().filter_map(|j| snap.joints.get(j)).map(|s| format!("{:.1}", s[1])).collect();
-                println!("SCENE step {i}: y={:.2} v=({:.2},{:.2},{:.2}) joints {:?}", c.translation().y,
-                    c.linvel().x, c.linvel().y, c.linvel().z, wheels);
+                let r = c.rotation();
+                // KOPER_SCENE_NOSE=x|z: which local axis is the nose (default z)
+                let nose_local = if std::env::var("KOPER_SCENE_NOSE").map_or(false, |v| v == "x") { Vec3::X } else { Vec3::Z };
+                let nose = Quat::from_xyzw(r.x, r.y, r.z, r.w) * nose_local;
+                if std::env::var("KOPER_SCENE_TRACE").is_ok() {
+                    // the aerodynamic pitch moment about the whole assembly's centre of mass, per body
+                    // positive = nose down
+                    let pitch_axis = (Quat::from_xyzw(r.x, r.y, r.z, r.w) * nose_local).cross(Quat::from_xyzw(r.x, r.y, r.z, r.w) * Vec3::Y);
+                    let pitch_axis = -pitch_axis;
+                    let ids: Vec<i64> = world.kontras.keys().copied().collect();
+                    for id in &ids { let h = world.kontras[id].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                    world.apply_aero(1.0 / 60.0);
+                    let total: f32 = ids.iter().map(|id| world.bodies.get(world.kontras[id].body).unwrap().mass()).sum();
+                    let center = ids.iter().fold(Vec3::ZERO, |sum, id| { let b = world.bodies.get(world.kontras[id].body).unwrap(); sum + b.center_of_mass() * b.mass() }) / total;
+                    let mut parts = String::new();
+                    let mut sum = 0.0;
+                    for id in &ids {
+                        let b = world.bodies.get(world.kontras[id].body).unwrap();
+                        let m = (b.user_torque() + (b.center_of_mass() - center).cross(b.user_force())).dot(pitch_axis);
+                        sum += m;
+                        if m.abs() > 50.0 {
+                            let up = Quat::from_xyzw(r.x, r.y, r.z, r.w) * Vec3::Y;
+                            let br = b.rotation();
+                            let tilt = (Quat::from_xyzw(br.x, br.y, br.z, br.w) * Vec3::Y).dot(Quat::from_xyzw(r.x, r.y, r.z, r.w) * Vec3::Z);
+                            let q = Quat::from_xyzw(r.x, r.y, r.z, r.w);
+                            let side = (q * nose_local).cross(up);
+                            let (fx, fz) = (b.user_force().dot(side), b.user_force().dot(q * nose_local));
+                            let arm = b.center_of_mass() - center;
+                            parts += &format!(" {id}:{m:.0}(F r/u/n {fx:.0}/{:.0}/{fz:.0} arm r/u/n {:.2}/{:.2}/{:.2} ownT {:.0} tilt {tilt:.2})",
+                                b.user_force().dot(up), arm.dot(side), arm.dot(up), arm.dot(q * nose_local), b.user_torque().dot(pitch_axis));
+                        }
+                    }
+                    for id in &ids { let h = world.kontras[id].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                    println!("SCENE pitchMoment={sum:.0} (+ = nose down){parts}");
+                    // the same about the body's own up axis: positive turns the nose left (counterclockwise from above)
+                    let yaw_axis = Quat::from_xyzw(r.x, r.y, r.z, r.w) * Vec3::Y;
+                    for id in &ids { let h = world.kontras[id].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                    world.apply_aero(1.0 / 60.0);
+                    let mut yaw = String::new();
+                    let mut total_yaw = 0.0;
+                    for id in &ids {
+                        let b = world.bodies.get(world.kontras[id].body).unwrap();
+                        let m = (b.user_torque() + (b.center_of_mass() - center).cross(b.user_force())).dot(yaw_axis);
+                        total_yaw += m;
+                        if m.abs() > 50.0 { yaw += &format!(" {id}:{m:.0}"); }
+                    }
+                    for id in &ids { let h = world.kontras[id].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                    println!("SCENE yawMoment={total_yaw:.0} yawRate={:.2}{yaw}", c.angvel().dot(yaw_axis));
+                    // and about the nose: positive rolls the right wing down
+                    let roll_axis = Quat::from_xyzw(r.x, r.y, r.z, r.w) * nose_local;
+                    for id in &ids { let h = world.kontras[id].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                    world.apply_aero(1.0 / 60.0);
+                    let mut roll = String::new();
+                    let mut total_roll = 0.0;
+                    for id in &ids {
+                        let b = world.bodies.get(world.kontras[id].body).unwrap();
+                        let m = (b.user_torque() + (b.center_of_mass() - center).cross(b.user_force())).dot(roll_axis);
+                        total_roll += m;
+                        if m.abs() > 50.0 { roll += &format!(" {id}:{m:.0}"); }
+                    }
+                    for id in &ids { let h = world.kontras[id].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                    println!("SCENE rollMoment={total_roll:.0} rollRate={:.2}{roll}", c.angvel().dot(roll_axis));
+                    if let Ok(probe) = std::env::var("KOPER_SCENE_BODY") {
+                        let id: i64 = probe.parse().unwrap_or(-1);
+                        if let Some(handle) = world.kontras.get(&id).map(|k| k.body) {
+                            for id2 in &ids { let h = world.kontras[id2].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                            world.apply_aero(1.0 / 60.0);
+                            let b = world.bodies.get(handle).unwrap();
+                            let q = Quat::from_xyzw(r.x, r.y, r.z, r.w);
+                            let (side, up, fwd) = ((q * nose_local).cross(q * Vec3::Y), q * Vec3::Y, q * nose_local);
+                            let f = b.user_force(); let v = b.linvel() - world.wind;
+                            println!("SCENE body {id} F side/up/fwd {:.0}/{:.0}/{:.0} v side/up/fwd {:.1}/{:.1}/{:.1} spin {:.1}",
+                                f.dot(side), f.dot(up), f.dot(fwd), v.dot(side), v.dot(up), v.dot(fwd), b.angvel().dot(fwd));
+                            for id2 in &ids { let h = world.kontras[id2].body; let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+                        }
+                    }
+                }
+                println!("SCENE step {i}: y={:.2} v=({:.2},{:.2},{:.2}) noseUp={:.1}deg w=({:.2},{:.2},{:.2}) joints {:?}", c.translation().y,
+                    c.linvel().x, c.linvel().y, c.linvel().z, nose.y.clamp(-1.0, 1.0).asin().to_degrees(),
+                    c.angvel().x, c.angvel().y, c.angvel().z, wheels);
             }
+        }
+        if std::env::var("KOPER_SCENE_TIME").is_ok() {
+            eprintln!("SCENE TIME 240 steps in {:.1} ms ({:.2} ms/step)", timer.elapsed().as_secs_f64()*1000.0, timer.elapsed().as_secs_f64()*1000.0/240.0);
         }
     }
 
@@ -4514,6 +5089,31 @@ mod aero_tests {
     }
 
     #[test]
+    fn flush_bearing_parts_keep_exact_material_order() {
+        let mut world = KhysWorld::new();
+        world.spawn_kontraktion_from_offsets(1,
+            vec![[0.0, 0.0, 0.0], [0.49, 0.0, 0.0]], &[1.0; 2], 0, [0.0, 10.0, 0.0]);
+        let mut materials = [[0.0; 15]; 2];
+        materials[0][9] = 0.49;
+        materials[0][12] = 0.49;
+        materials[0][0] = 0.73;
+        world.set_block_materials(1, &materials);
+        assert_eq!(world.kontras[&1].block_offsets[0], [0.49, 0.0, 0.0],
+            "flush wheel material was applied to the rotor's native slot");
+        assert_eq!(world.kontras[&1].block_offsets[1], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn removing_flush_wheel_keeps_rotor_slot_and_occupancy() {
+        let mut world = KhysWorld::new();
+        world.spawn_kontraktion_from_offsets(1,
+            vec![[0.0, 0.0, 0.0], [0.49, 0.0, 0.0]], &[1.0; 2], 0, [0.0, 10.0, 0.0]);
+        assert!(world.remove_block_at_exact_offset(1, [0.49, 0.0, 0.0]));
+        assert_eq!(world.kontras[&1].block_offsets, vec![[0.0, 0.0, 0.0]], "wheel removal took the rotor slot");
+        assert!(world.kontras[&1].block_set.contains(&[0, 0, 0]), "rotor lost native occupancy");
+    }
+
+    #[test]
     fn micro_grid_material_builds_exact_subcell_collider() {
         let mut world = KhysWorld::new();
         world.gravity = Vec3::ZERO;
@@ -4766,8 +5366,7 @@ mod aero_tests {
         let backward = koper_rotor(-20.0, 0.0);
         let faster = koper_rotor(30.0, 0.0);
         assert!(forward > still + 0.2, "spinning plus gave no thrust: still={still} spun={forward}");
-        // no motor ever drove it, so the blades keep their default twist: dragged round the wrong way
-        // it pushes back in, like a real prop. a motor-driven reverse re-twists (counter pair test)
+        // Reversing motion keeps the same blade twist and reverses thrust.
         assert!(backward < still - 0.2, "turned against its twist it should push in: still={still} back={backward}");
         assert!(((forward - still) + (backward - still)).abs() < 0.05,
             "one spin direction pushes harder than the other: up={forward} down={backward}");
@@ -4906,7 +5505,7 @@ mod koper_plane_tests {
     use super::*;
 
     fn plate(off: Vec3, normal: Vec3) -> AeroSurface {
-        AeroSurface { off, normal, area: 1.0, cd: 0.8, cl: 2.0, buoy: 0.0, chunky: false }
+        AeroSurface { off, normal, area: 1.0, cd: 0.8, cl: 2.0, propeller: 2.0, buoy: 0.0, chunky: false }
     }
 
     // a plus of four flat plates on its own body, jointed to `chassis` at `at` spinning about `axis`
@@ -4946,8 +5545,26 @@ mod koper_plane_tests {
 
     fn body(world: &KhysWorld, id: i64) -> &RigidBody { world.bodies.get(world.kontras[&id].body).unwrap() }
 
-    // two props on one airframe, one engine reversed to cancel the torque: both still pull forward,
-    // so it flies straight instead of yawing off sideways
+    // Counter-rotation needs explicitly mirrored blades, fixed before either motor runs.
+    #[test]
+    fn explicit_blade_pitch_rejects_invalid_hands_and_survives_motor_retuning() {
+        let mut world = KhysWorld::new();
+        let pos = Vec3::new(0.0, 150.0, 0.0);
+        world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, pos.to_array());
+        prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 60.0);
+        world.process_cmd(PhysicsCmd::JointSetBladeHandedness { joint_id: 10, hand: -1.0 });
+        for hand in [0.0, 2.0, f32::NAN, f32::INFINITY] {
+            world.process_cmd(PhysicsCmd::JointSetBladeHandedness { joint_id: 10, hand });
+            assert_eq!(world.joints[&10].hand, -1.0, "invalid pitch erased the selected blade hand");
+        }
+        for target_vel in [-60.0, 0.0, 60.0] {
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel, max_force: 4000.0 });
+            assert_eq!(world.joints[&10].hand, -1.0, "changing motor direction changed blade pitch");
+        }
+        world.process_cmd(PhysicsCmd::JointSetBladeHandedness { joint_id: 10, hand: 1.0 });
+        assert_eq!(world.joints[&10].hand, 1.0);
+    }
+
     #[test]
     fn counter_rotating_props_both_pull_forward() {
         let mut world = KhysWorld::new();
@@ -4956,6 +5573,7 @@ mod koper_plane_tests {
             &[1.0, 1.0, 1.0], 0, [pos.x, pos.y, pos.z]);
         prop(&mut world, 2, 1, pos, Vec3::new(-2.0, 0.0, 1.0), Vec3::Z, 10, 60.0);
         prop(&mut world, 3, 1, pos, Vec3::new(2.0, 0.0, 1.0), Vec3::Z, 11, -60.0);
+        world.process_cmd(PhysicsCmd::JointSetBladeHandedness { joint_id: 11, hand: -1.0 });
         // a bare stick with props in front and no tail loops soon after, like a real one would
         for _ in 0..12 { world.step(1.0 / 60.0); }
         let b = body(&world, 1);
@@ -4998,8 +5616,599 @@ mod koper_plane_tests {
         }
     }
 
-    // a prop built from full blocks (a cube has no face of its own) pulls along its axle, both
-    // spin directions, instead of paddling against the motor
+    #[test]
+    fn dedicated_zero_wing_propeller_produces_axial_thrust() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 150.0, 0.0);
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+            prop(&mut world, 2, 1, pos, Vec3::new(0.0, 0.0, 1.0), Vec3::Z, 10, 60.0);
+            for s in &mut world.kontras.get_mut(&2).unwrap().aero { s.cl = 0.0; s.propeller = 22.0; }
+            let k = world.kontras.get_mut(&2).unwrap();
+            k.aero_mode = mode;
+            let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+            k.aero = aero_geometry::panels(pieces);
+            for id in [1, 2] { world.process_cmd(PhysicsCmd::SetGravityScale { id, scale: 0.0 }); }
+            for _ in 0..120 { world.step(1.0 / 60.0); }
+            let v = body(&world, 1).linvel();
+            assert!(v.z > 0.05, "dedicated propeller lacks axial thrust in {mode:?}: {v:?}");
+        }
+    }
+
+    // A fixed bearing bench isolates motor load from airframe trim and translation.
+    fn powered_material_bench(mode: AeroMode, mass: f32, coefficient: f32, reverse: bool) -> (f32, f32, f32, f32) {
+        let mut world = KhysWorld::new();
+        let pos = Vec3::new(0.0, 200.0, 0.0);
+        // A heavy stand keeps the assembly safety cap above the measured blade forces.
+        world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+        prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 66.67);
+        world.set_parked(1, true);
+        world.process_cmd(PhysicsCmd::SetGravityScale { id: 2, scale: 0.0 });
+        for off in world.kontras[&2].block_offsets.clone() { world.set_block_mass(2, off, mass); }
+        let h = world.kontras[&2].body;
+        world.bodies.get_mut(h).unwrap().recompute_mass_properties_from_colliders(&world.colliders);
+        let k = world.kontras.get_mut(&2).unwrap();
+        k.aero_mode = mode;
+        for surface in &mut k.aero { surface.cl = 0.0; surface.propeller = coefficient; }
+        let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+            aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+        k.aero = aero_geometry::panels(pieces);
+        let mut force = 0.0;
+        let mut spin = 0.0;
+        let mut min_spin = f32::INFINITY;
+        let mut max_spin = f32::NEG_INFINITY;
+        for step in 0..240 {
+            world.process_cmd(PhysicsCmd::JointSetMotor {
+                joint_id: 10, target_vel: if reverse && step >= 60 { -66.67 } else { 66.67 }, max_force: 2340.0,
+            });
+            world.step(1.0 / 60.0);
+            if step >= 180 {
+                world.apply_aero(1.0 / 60.0);
+                let b = body(&world, 2);
+                force += b.user_force().z;
+                spin += b.angvel().z;
+                min_spin = min_spin.min(b.angvel().z);
+                max_spin = max_spin.max(b.angvel().z);
+                let b = world.bodies.get_mut(h).unwrap();
+                b.reset_forces(false);
+                b.reset_torques(false);
+            }
+        }
+        (force / 60.0, spin / 60.0, min_spin, max_spin)
+    }
+
+    // PF-03: once the engine lets go a still-air propeller must run down, not keep its RPM
+    #[test]
+    fn unpowered_propeller_runs_down_in_still_air() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 200.0, 0.0);
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+            prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 66.67);
+            world.set_parked(1, true);
+            world.process_cmd(PhysicsCmd::SetGravityScale { id: 2, scale: 0.0 });
+            for off in world.kontras[&2].block_offsets.clone() { world.set_block_mass(2, off, 0.18); }
+            let h = world.kontras[&2].body;
+            world.bodies.get_mut(h).unwrap().recompute_mass_properties_from_colliders(&world.colliders);
+            let k = world.kontras.get_mut(&2).unwrap();
+            k.aero_mode = mode;
+            for surface in &mut k.aero { surface.cl = 0.0; surface.propeller = 22.0; }
+            let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+            k.aero = aero_geometry::panels(pieces);
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: 66.67, max_force: 2340.0 });
+            for _ in 0..180 { world.step(1.0 / 60.0); }
+            let powered = body(&world, 2).angvel().z;
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: 0.0, max_force: 0.0 });
+            let mut trace = Vec::new();
+            for i in 0..1200 {
+                world.step(1.0 / 60.0);
+                if i % 120 == 119 { trace.push(body(&world, 2).angvel().z); }
+            }
+            assert!(powered > 20.0, "{mode:?} bench never spun up: {powered}");
+            assert!(trace.windows(2).all(|w| w[1].abs() <= w[0].abs() + 1.0e-4),
+                "{mode:?} an unpowered prop gained speed: {trace:?}");
+            assert!(trace[4].abs() < powered * 0.05,
+                "{mode:?} unpowered prop still turns after 10 s: powered={powered} trace={trace:?}");
+        }
+    }
+
+    // PF-03/PF-04: flying into the air must not wind a prop past what the motor and the inflow allow.
+    // the owner's plane rolled at 32 b/s and its prop sat on the 120 rad/s clamp with the engine off
+    #[test]
+    fn inflow_does_not_wind_a_prop_onto_the_spin_clamp() {
+        for mode in [AeroMode::Correct, AeroMode::Extreme, AeroMode::Low] {
+        for (target, wind) in [(66.67f32, -32.0f32), (66.67, 32.0), (-66.67, -32.0), (-66.67, 32.0), (0.0, 32.0), (0.0, -32.0)] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 200.0, 0.0);
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+            prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, target);
+            world.set_parked(1, true);
+            world.process_cmd(PhysicsCmd::SetGravityScale { id: 2, scale: 0.0 });
+            for off in world.kontras[&2].block_offsets.clone() { world.set_block_mass(2, off, 0.18); }
+            let h = world.kontras[&2].body;
+            world.bodies.get_mut(h).unwrap().recompute_mass_properties_from_colliders(&world.colliders);
+            let k = world.kontras.get_mut(&2).unwrap();
+            k.aero_mode = mode;
+            for surface in &mut k.aero { surface.cl = 0.0; surface.propeller = 22.0; }
+            let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+            k.aero = aero_geometry::panels(pieces);
+            world.wind = Vec3::Z * wind;
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: target, max_force: if target == 0.0 { 0.0 } else { 2340.0 } });
+            // a prop already turning hard, the way it is when the engine is cut in flight
+            world.process_cmd(PhysicsCmd::SetAngularVelocity { id: 2, v: [0.0, 0.0, if target < 0.0 { -60.0 } else { 60.0 }] });
+            let mut peak = 0.0f32;
+            let (mut low, mut high) = (f32::INFINITY, f32::NEG_INFINITY);
+            for i in 0..300 {
+                world.step(1.0 / 60.0);
+                let spin = body(&world, 2).angvel().z;
+                peak = peak.max(spin.abs());
+                if i >= 240 { low = low.min(spin); high = high.max(spin); }
+            }
+            // no motor: an ideal windmill turns at inflow / pitch, give it a third more
+            let ceiling = if target == 0.0 { 32.0 / PROP_PITCH * 1.35 } else { target.abs() * 1.02 };
+            assert!(peak <= ceiling.max(61.0),
+                "{mode:?} target={target} wind={wind}: inflow wound the prop to {peak} rad/s");
+            assert!(high - low < 2.0,
+                "{mode:?} target={target} wind={wind}: prop speed chatters between {low} and {high}");
+        }
+        }
+    }
+
+    // a prop disk meeting the air at an angle keeps only a small sideways force
+    #[test]
+    fn prop_normal_force_at_an_angle() {
+        for mode in [AeroMode::Correct, AeroMode::Extreme] {
+        for deg in [0.0f32, 5.0, 10.0, 20.0] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 200.0, 0.0);
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+            prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 50.0);
+            world.set_parked(1, true);
+            world.process_cmd(PhysicsCmd::SetGravityScale { id: 2, scale: 0.0 });
+            let k = world.kontras.get_mut(&2).unwrap();
+            k.aero_mode = mode;
+            for surface in &mut k.aero { surface.propeller = 22.0; }
+            let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+            k.aero = aero_geometry::panels(pieces);
+            // flying toward +z (the way it pulls) with the nose 'deg' above the flight path: air from -y too
+            let a = deg.to_radians();
+            // well below the prop's pitch speed (0.6 x 50 = 30 b/s), where a real prop still pulls
+            world.wind = -(Vec3::Z * a.cos() - Vec3::Y * a.sin()) * 18.0;
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: 50.0, max_force: 2340.0 });
+            for _ in 0..120 { world.step(1.0 / 60.0); }
+            let h = world.kontras[&2].body;
+            { let b = world.bodies.get_mut(h).unwrap(); b.reset_forces(false); b.reset_torques(false); }
+            world.apply_aero(1.0 / 60.0);
+            let b = body(&world, 2);
+            let (thrust, normal) = (b.user_force().z, b.user_force().y);
+            assert!(thrust > 100.0, "{mode:?} {deg} deg: prop lost its thrust: {thrust}");
+            // the disk's normal force is that of plain block blades, not of the gained ones: with the
+            // gain in it was 36% of thrust at 8 degrees, later still 17%, a canard on the nose that
+            // outweighed the tail and stood every tractor plane on its tail. this bench gives 0.04 x thrust x
+            // angle now, 0.13 with the old square root gain
+            assert!(normal.abs() <= thrust * a.max(0.02) * 0.08,
+                "{mode:?} {deg} deg: prop disk pushes sideways {normal} against thrust {thrust}");
+        }
+        }
+    }
+
+    // local wind pushes a body without jumping, and a dimension without air pushes nothing
+    #[test]
+    fn body_wind_eases_in_and_needs_air() {
+        for density in [1.0f32, 0.0] {
+            let mut world = KhysWorld::new();
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], &[0.3; 3], 0, [0.0, 200.0, 0.0]);
+            world.process_cmd(PhysicsCmd::SetGravityScale { id: 1, scale: 0.0 });
+            world.process_cmd(PhysicsCmd::SetAir { density, sea_level: 64.0, scale_height: 180.0, min_density: 0.001 });
+            world.process_cmd(PhysicsCmd::SetBodyWind { id: 1, v: [20.0, 0.0, 0.0] });
+            world.step(1.0 / 60.0);
+            let first = body(&world, 1).linvel().x;
+            for _ in 0..120 { world.step(1.0 / 60.0); }
+            let later = body(&world, 1).linvel().x;
+            if density > 0.0 {
+                assert!(later > 0.5 && later < 20.0, "wind did not carry the body: {later}");
+                assert!(first < later * 0.2, "wind landed as a step instead of easing in: first={first} later={later}");
+            } else {
+                assert!(later.abs() < 1.0e-3, "airless dimension still blew the body along: {later}");
+            }
+            // handing the body back to the world wind (zero here) stops pushing it
+            world.process_cmd(PhysicsCmd::SetBodyWind { id: 1, v: [f32::NAN; 3] });
+            assert!(world.kontras[&1].wind_target.is_none());
+        }
+    }
+
+    // the prop's drag reaches a free airframe through its motor; prop_reaction keeps that share of it
+    #[test]
+    fn prop_reaction_scales_the_airframe_roll() {
+        let mut rolls = Vec::new();
+        for share in [1.0f32, 0.25] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 200.0, 0.0);
+            // an airframe-like hull: much more roll inertia than the prop
+            world.spawn_kontraktion_from_offsets(1, vec![[-4.0, 0.0, 0.0], [-2.0, 0.0, 0.0], [0.0; 3], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
+                &[20.0; 5], 0, [pos.x, pos.y, pos.z]);
+            prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 60.0);
+            for id in [1, 2] { world.process_cmd(PhysicsCmd::SetGravityScale { id, scale: 0.0 }); }
+            // the hull may only roll about the prop axis: a tailless stick with a tractor prop flies
+            // off and tumbles, which is real but not what this measures
+            world.process_cmd(PhysicsCmd::CreateRevoluteJoint { joint_id: 11, a: 1, b: 0,
+                anchor_a: [0.0; 3], anchor_b: [pos.x, pos.y, pos.z], axis: [0.0, 0.0, 1.0] });
+            let k = world.kontras.get_mut(&2).unwrap();
+            for surface in &mut k.aero { surface.cl = 0.0; surface.propeller = 22.0; }
+            let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+            k.aero = aero_geometry::panels(pieces);
+            world.process_cmd(PhysicsCmd::SetPropReaction(share));
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: 60.0, max_force: 2340.0 });
+            for _ in 0..120 { world.step(1.0 / 60.0); }
+            let hull = body(&world, 1).angvel().z;
+            rolls.push(hull);
+            let relative = body(&world, 2).angvel().z - hull;
+            assert!(relative > 10.0, "share {share}: the prop did not spin up: {relative}");
+        }
+        assert!(rolls[0] < -0.5, "the motor reaction did not roll the airframe: {rolls:?}");
+        assert!(rolls[1].abs() < rolls[0].abs() * 0.5 && rolls[1] < 0.0,
+            "prop_reaction 0.25 did not take most of the roll away: {rolls:?}");
+    }
+
+    // a wing surface swung past stall is a flat plate: no more lift than drag at 45 degrees
+    #[test]
+    fn stalled_wing_panel_is_a_flat_plate() {
+        let a = 45f32.to_radians();
+        let normal = Vec3::new(a.sin(), a.cos(), 0.0);
+        let air = Vec3::new(-30.0, 0.0, 0.0); // flying toward +x
+        let f = KhysWorld::aero_panel_force(air, normal, 1.0, 0.35, 4.392, 0.08, 4.0, false, None, 0.0, 1.0, 0.06, 0.0);
+        let dir = air.normalize();
+        let drag = -f.dot(dir);
+        let lift = (f + dir * drag).length();
+        assert!(drag > 0.0 && lift <= drag * 1.15, "stalled panel at 45 deg: lift {lift} drag {drag}");
+        // below stall the wing keeps its polar
+        let b = 5f32.to_radians();
+        let g = KhysWorld::aero_panel_force(air, Vec3::new(b.sin(), b.cos(), 0.0), 1.0, 0.35, 4.392, 0.08, 4.0, false, None, 0.0, 1.0, 0.06, 0.0);
+        let d2 = -g.dot(dir);
+        let l2 = (g + dir * d2).length();
+        assert!(l2 > d2 * 3.0, "attached wing lost its lift: lift {l2} drag {d2}");
+    }
+
+    // a tailplane put on its own bearing (an elevator) is still a tail: same lift as welded to the hull
+    #[test]
+    fn a_tail_on_a_bearing_flies_like_a_welded_tail() {
+        for mode in [AeroMode::Correct, AeroMode::Extreme] {
+            let mut lifts = Vec::new();
+            for jointed in [false, true] {
+                let mut world = KhysWorld::new();
+                let pos = Vec3::new(0.0, 200.0, 0.0);
+                let hull: Vec<[f32; 3]> = (-3..=3).map(|z| [0.0, 0.0, z as f32]).collect();
+                world.spawn_kontraktion_from_offsets(1, hull, &[5.0; 7], 0, [pos.x, pos.y, pos.z]);
+                let tail_at = Vec3::new(0.0, 0.0, -6.0);
+                if jointed {
+                    world.spawn_kontraktion_from_offsets(2, vec![[0.0; 3]], &[0.3], 0, [pos.x, pos.y, pos.z + tail_at.z]);
+                    world.kontras.get_mut(&2).unwrap().aero.push(plate(Vec3::ZERO, Vec3::Y));
+                    world.process_cmd(PhysicsCmd::CreateRevoluteJoint { joint_id: 9, a: 1, b: 2,
+                        anchor_a: [0.0, 0.0, -5.5], anchor_b: [0.0, 0.0, 0.5], axis: [1.0, 0.0, 0.0] });
+                } else {
+                    world.kontras.get_mut(&1).unwrap().aero.push(plate(tail_at, Vec3::Y));
+                }
+                for k in world.kontras.values_mut() { k.aero_mode = mode; }
+                let ids: Vec<i64> = world.kontras.keys().copied().collect();
+                for id in &ids {
+                    world.process_cmd(PhysicsCmd::SetGravityScale { id: *id, scale: 0.0 });
+                    let h = world.kontras[id].body;
+                    world.bodies.get_mut(h).unwrap().set_linvel(Vec3::new(0.0, -2.0, 30.0), true);
+                }
+                world.apply_aero(1.0 / 60.0);
+                let lift: f32 = ids.iter().map(|id| world.bodies.get(world.kontras[id].body).unwrap().user_force().y).sum();
+                lifts.push(lift);
+            }
+            assert!((lifts[0] - lifts[1]).abs() <= lifts[0].abs() * 0.1 + 1.0,
+                "{mode:?}: a tail on a bearing lifts {} but welded {}", lifts[1], lifts[0]);
+        }
+    }
+
+    #[test]
+    fn reversing_a_powered_propeller_reverses_sustained_thrust() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let forward = powered_material_bench(mode, 0.18, 22.0, false);
+            let reverse = powered_material_bench(mode, 0.18, 22.0, true);
+            assert!(forward.0 > 1.0 && forward.1 > 5.0, "{mode:?} forward bench: {forward:?}");
+            assert!(reverse.0 < -1.0 && reverse.1 < -5.0,
+                "{mode:?} reversed motor still pushes forward: forward={forward:?} reverse={reverse:?}");
+        }
+    }
+
+    #[test]
+    fn magic_propeller_has_more_sustained_thrust_on_the_same_engine() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let ordinary = powered_material_bench(mode, 0.18, 22.0, false);
+            let magic = powered_material_bench(mode, 0.06, 44.0, false);
+            eprintln!("MATERIAL_BENCH {mode:?} ordinary={ordinary:?} magic={magic:?}");
+            assert!(magic.0 > ordinary.0 * 1.25 && magic.1.abs() > ordinary.1.abs() * 0.75,
+                "{mode:?} magic propeller loses its advantage under motor load: ordinary={ordinary:?} magic={magic:?}");
+            assert!(magic.2 > 10.0 && magic.3 < 83.0,
+                "{mode:?} magic rotor stalls or overshoots under steady motor load: {magic:?}");
+        }
+    }
+
+    #[test]
+    fn velocity_motor_supports_its_torque_budget_on_light_rotors() {
+        for mass in [0.06, 0.18] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 200.0, 0.0);
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+            prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 20.0);
+            world.set_parked(1, true);
+            world.atmosphere_scale = 0.0;
+            world.process_cmd(PhysicsCmd::SetGravityScale { id: 2, scale: 0.0 });
+            for off in world.kontras[&2].block_offsets.clone() { world.set_block_mass(2, off, mass); }
+            let h = world.kontras[&2].body;
+            world.bodies.get_mut(h).unwrap().recompute_mass_properties_from_colliders(&world.colliders);
+            world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: 20.0, max_force: 100.0 });
+            for _ in 0..180 {
+                world.bodies.get_mut(h).unwrap().add_torque(Vec3::NEG_Z * 50.0, true);
+                world.step(1.0 / 60.0);
+            }
+            let spin = body(&world, 2).angvel().z;
+            assert!((spin - 19.5).abs() < 0.1,
+                "mass={mass} motor fails to supply a 50 Nm load within its 100 Nm budget: spin={spin}");
+        }
+    }
+
+    fn instantaneous_rotor_wrench(world_anchor: bool, model: MotorModel, powered: bool) -> (Vec3, Vec3) {
+        let mut world = KhysWorld::new();
+        let pos = Vec3::new(0.0, 200.0, 0.0);
+        world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+        prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 60.0);
+        world.set_parked(1, true);
+        if world_anchor {
+            world.destroy_joint(10);
+            world.process_cmd(PhysicsCmd::CreateRevoluteJoint {
+                joint_id: 10, a: 2, b: 0, anchor_a: [0.0; 3],
+                anchor_b: [0.0, 200.0, 2.0], axis: [0.0, 0.0, 1.0],
+            });
+        }
+        world.atmosphere_scale = 0.001;
+        let k = world.kontras.get_mut(&2).unwrap();
+        for s in &mut k.aero { s.cl = 0.0; s.propeller = 22.0; }
+        let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+            aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+        k.aero = aero_geometry::panels(pieces);
+        world.process_cmd(PhysicsCmd::JointSetMotor {
+            joint_id: 10, target_vel: if world_anchor { -60.0 } else { 60.0 },
+            max_force: if powered { 100.0 } else { 0.0 },
+        });
+        let handle = world.joints[&10].handle;
+        world.impulse_joints.get_mut(handle, true).unwrap().data.set_motor_model(JointAxis::AngX, model);
+        world.process_cmd(PhysicsCmd::SetAngularVelocity { id: 2, v: [0.0, 0.0, 80.0] });
+        world.apply_aero(1.0 / 60.0);
+        let b = body(&world, 2);
+        (b.user_force(), b.user_torque())
+    }
+
+    #[test]
+    fn world_anchored_rotor_uses_the_fixed_endpoint_motor_frame() {
+        let parent = instantaneous_rotor_wrench(false, MotorModel::ForceBased, true);
+        let fixed = instantaneous_rotor_wrench(true, MotorModel::ForceBased, true);
+        assert!((parent.0 - fixed.0).length() < 1.0e-4 && (parent.1 - fixed.1).length() < 1.0e-4,
+            "equivalent fixed bearings disagree while braking an overspeed rotor: parent={parent:?} world={fixed:?}");
+    }
+
+    #[test]
+    fn acceleration_motor_is_not_interpreted_as_a_force_motor_in_aero_load() {
+        let unsupported = instantaneous_rotor_wrench(false, MotorModel::AccelerationBased, true);
+        let coast = instantaneous_rotor_wrench(false, MotorModel::AccelerationBased, false);
+        assert!((unsupported.0 - coast.0).length() < 1.0e-4 && (unsupported.1 - coast.1).length() < 1.0e-4,
+            "acceleration damping was incorrectly treated as a torque coefficient: motor={unsupported:?} coast={coast:?}");
+    }
+
+    #[test]
+    fn a_stationary_wing_on_a_bearing_keeps_its_aerodynamic_moment() {
+        for mode in [AeroMode::Correct, AeroMode::Extreme] {
+            let mut wrenches = Vec::new();
+            for mounted in [false, true] {
+                let mut world = KhysWorld::new();
+                world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [0.0, 200.0, 0.0]);
+                world.spawn_kontraktion_from_offsets(2,
+                    vec![[0.0, 0.0, -1.0], [0.0; 3], [0.0, 0.0, 1.0]],
+                    &[0.3; 3], 0, [2.0, 200.0, 0.0]);
+                world.set_parked(1, true);
+                let k = world.kontras.get_mut(&2).unwrap();
+                k.aero_mode = mode;
+                k.aero.push(plate(Vec3::Z, Vec3::Y));
+                if mounted {
+                    world.process_cmd(PhysicsCmd::CreateRevoluteJoint {
+                        joint_id: 10, a: 1, b: 2, anchor_a: [2.0, 0.0, 0.0],
+                        anchor_b: [0.0; 3], axis: [1.0, 0.0, 0.0],
+                    });
+                }
+                world.process_cmd(PhysicsCmd::SetVelocity { id: 2, v: [0.0, 0.0, 8.0] });
+                world.apply_aero(1.0 / 60.0);
+                let b = body(&world, 2);
+                wrenches.push((b.user_force(), b.user_torque()));
+            }
+            assert!(wrenches[0].1.length() > 0.1, "{mode:?} asymmetric wing has no aerodynamic moment");
+            assert!((wrenches[0].0 - wrenches[1].0).length() < 1.0e-4
+                && (wrenches[0].1 - wrenches[1].1).length() < 1.0e-4,
+                "{mode:?} adding a bearing discarded the stationary wing's moment: {wrenches:?}");
+        }
+    }
+
+    #[test]
+    fn aerodynamic_wrench_is_independent_of_the_body_coordinate_origin() {
+        for mode in [AeroMode::Correct, AeroMode::Extreme] {
+            let mut wrenches = Vec::new();
+            for shift in [Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0)] {
+                let mut world = KhysWorld::new();
+                let offsets = [Vec3::ZERO, Vec3::Z * 2.0].map(|off| (off + shift).to_array());
+                world.spawn_kontraktion_from_offsets(1, offsets.into(), &[9.0, 1.0], 0,
+                    (Vec3::new(0.0, 200.0, 0.0) - shift).to_array());
+                let k = world.kontras.get_mut(&1).unwrap();
+                k.aero_mode = mode;
+                k.aero.push(plate(Vec3::Z + shift, Vec3::Y));
+                world.process_cmd(PhysicsCmd::SetVelocity { id: 1, v: [0.0, 0.0, 8.0] });
+                world.process_cmd(PhysicsCmd::SetAngularVelocity { id: 1, v: [0.1, 0.2, 0.3] });
+                world.apply_aero(1.0 / 60.0);
+                let b = body(&world, 1);
+                wrenches.push((b.user_force(), b.user_torque()));
+            }
+            assert!((wrenches[0].0 - wrenches[1].0).length() < 1.0e-4
+                && (wrenches[0].1 - wrenches[1].1).length() < 1.0e-4,
+                "{mode:?} shifting only local coordinates changed the physical aero wrench: {wrenches:?}");
+        }
+    }
+
+    #[test]
+    fn propeller_pitch_radius_stays_on_the_bearing_when_ballast_moves_the_com() {
+        let mut thrust = Vec::new();
+        for ballast_x in [0.0, 1.0] {
+            let mut world = KhysWorld::new();
+            let pos = Vec3::new(0.0, 200.0, 0.0);
+            world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, pos.to_array());
+            prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 20.0);
+            world.set_parked(1, true);
+            world.process_cmd(PhysicsCmd::AddBlock { id: 2, offset: [ballast_x, 0.0, 2.0], mass: 100.0 });
+            let handle = world.kontras[&2].body;
+            let b = world.bodies.get_mut(handle).unwrap();
+            b.recompute_mass_properties_from_colliders(&world.colliders);
+            let omega = Vec3::Z * 20.0;
+            b.set_angvel(omega, true);
+            b.set_linvel(omega.cross(b.local_center_of_mass()), true);
+            world.apply_aero(1.0e-9);
+            thrust.push(body(&world, 2).user_force().z);
+        }
+        assert!(thrust[0] > 1.0 && (thrust[0] - thrust[1]).abs() < 1.0e-3,
+            "moving non-aerodynamic ballast changed blade pitch at the same actual panel velocities: {thrust:?}");
+    }
+
+    #[test]
+    fn explicit_propeller_coefficients_order_real_axial_acceleration() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let mut speeds = Vec::new();
+            for coefficient in [2.0, 2.64, 4.0, 8.0, 22.0, 44.0] {
+                let mut world = KhysWorld::new();
+                let pos = Vec3::new(0.0,150.0,0.0);
+                world.spawn_kontraktion_from_offsets(1,vec![[0.0;3]],&[100.0],0,[pos.x,pos.y,pos.z]);
+                prop(&mut world,2,1,pos,Vec3::new(0.0,0.0,1.0),Vec3::Z,10,60.0);
+                for id in [1,2] { world.process_cmd(PhysicsCmd::SetGravityScale { id, scale:0.0 }); }
+                world.process_cmd(PhysicsCmd::SetAngularVelocity { id:2, v:[0.0,0.0,60.0] });
+                let k=world.kontras.get_mut(&2).unwrap(); k.aero_mode=mode;
+                for s in &mut k.aero { s.cl=0.0; s.propeller=coefficient; }
+                let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                    aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+                k.aero = aero_geometry::panels(pieces);
+                world.step(1.0/60.0);
+                speeds.push(body(&world,1).linvel().z);
+            }
+            assert!(speeds.windows(2).all(|w| w[1]>w[0]), "{mode:?} propeller speeds {speeds:?}");
+        }
+    }
+
+    #[test]
+    fn contiguous_full_cube_strip_pulls_along_its_bearing_axis() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let mut world=KhysWorld::new(); let pos=Vec3::new(0.0,150.0,0.0);
+            world.spawn_kontraktion_from_offsets(1,vec![[0.0;3]],&[100.0],0,[pos.x,pos.y,pos.z]);
+            prop(&mut world,2,1,pos,Vec3::new(0.0,0.0,1.0),Vec3::Z,10,60.0);
+            for id in [1,2] { world.process_cmd(PhysicsCmd::SetGravityScale {id,scale:0.0}); }
+            let k=world.kontras.get_mut(&2).unwrap(); k.aero_mode=mode;
+            let pieces=[-1.5,-0.5,0.5,1.5].map(|x| {
+                let mut surface=plate(Vec3::new(x,0.0,0.0),Vec3::Z);
+                surface.cl=0.0; surface.propeller=22.0;
+                aero_geometry::AeroPiece { surface, size:Vec3::ONE }
+            });
+            k.aero=aero_geometry::panels(pieces.into());
+            for _ in 0..120 { world.step(1.0/60.0); }
+            let speed=body(&world,1).linvel().z;
+            assert!(speed>0.05,"{mode:?} contiguous fullcube blade did not pull: {speed}");
+        }
+    }
+
+    #[test]
+    fn strong_light_rotor_drag_cannot_reverse_angular_momentum_in_one_step() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            for coefficient in [22.0, 44.0] {
+                let mut world = KhysWorld::new();
+                let pos = Vec3::new(0.0, 150.0, 0.0);
+                world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+                prop(&mut world, 2, 1, pos, Vec3::Z, Vec3::Z, 10, 60.0);
+                world.process_cmd(PhysicsCmd::JointSetMotor { joint_id: 10, target_vel: 0.0, max_force: 0.0 });
+                let offsets = world.kontras[&2].block_offsets.clone();
+                for off in offsets { world.set_block_mass(2, off, 0.06); }
+                let h = world.kontras[&2].body;
+                world.bodies.get_mut(h).unwrap().recompute_mass_properties_from_colliders(&world.colliders);
+                world.process_cmd(PhysicsCmd::SetAngularVelocity { id: 2, v: [0.0, 0.0, 60.0] });
+                let k = world.kontras.get_mut(&2).unwrap();
+                k.aero_mode = mode;
+                for surface in &mut k.aero { surface.cl = 0.0; surface.propeller = coefficient; }
+                let pieces = std::mem::take(&mut k.aero).into_iter().map(|surface|
+                    aero_geometry::AeroPiece { surface, size: Vec3::ONE }).collect();
+                k.aero = aero_geometry::panels(pieces);
+                let dt = 1.0 / 60.0;
+                world.apply_aero(dt);
+                let b = body(&world, 2);
+                let predicted = b.angvel() + b.mass_properties().effective_world_inv_inertia * b.user_torque() * dt;
+                assert!(predicted.z >= 0.0, "{mode:?} coefficient={coefficient} aerodynamic drag reverses the rotor: {predicted:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn centered_single_block_rotor_produces_thrust() {
+        for mode in [AeroMode::Low, AeroMode::Correct, AeroMode::Extreme] {
+            let mut speeds = Vec::new();
+            for size in [1.0, 0.5, 0.25] {
+                let mut world = KhysWorld::new();
+                let pos = Vec3::new(0.0, 150.0, 0.0);
+                world.spawn_kontraktion_from_offsets(1, vec![[0.0; 3]], &[100.0], 0, [pos.x, pos.y, pos.z]);
+                prop(&mut world, 2, 1, pos, Vec3::new(0.0, 0.0, 1.0), Vec3::Z, 10, 60.0);
+                for id in [1, 2] { world.process_cmd(PhysicsCmd::SetGravityScale { id, scale: 0.0 }); }
+                world.process_cmd(PhysicsCmd::SetAngularVelocity { id: 2, v: [0.0, 0.0, 60.0] });
+                let mut surface = plate(Vec3::ZERO, Vec3::ZERO);
+                surface.cl = 0.0; surface.propeller = 22.0;
+                let k = world.kontras.get_mut(&2).unwrap();
+                k.aero_mode = mode;
+                k.aero = aero_geometry::panels(vec![aero_geometry::AeroPiece { surface, size: Vec3::splat(size) }]);
+                world.step(1.0 / 60.0);
+                let speed = body(&world, 1).linvel().z;
+                assert!(speed > 0.000001, "{mode:?} centered {size} block rotor has no thrust: {speed}");
+                speeds.push(speed);
+            }
+            assert!(speeds.windows(2).all(|v| v[0] > v[1]), "{mode:?} micro blade forces: {speeds:?}");
+        }
+    }
+
+    #[test]
+    fn rotor_force_is_invariant_under_identical_slab_subdivision() {
+        for mode in [AeroMode::Low,AeroMode::Correct,AeroMode::Extreme] {
+            let mut speeds=Vec::new();
+            for cell in [1.0_f32,0.5,0.25] {
+                let mut world=KhysWorld::new(); let pos=Vec3::new(0.0,150.0,0.0);
+                world.spawn_kontraktion_from_offsets(1,vec![[0.0;3]],&[100.0],0,[pos.x,pos.y,pos.z]);
+                prop(&mut world,2,1,pos,Vec3::new(0.0,0.0,1.0),Vec3::Z,10,60.0);
+                for id in [1,2] { world.process_cmd(PhysicsCmd::SetGravityScale {id,scale:0.0}); }
+                world.process_cmd(PhysicsCmd::SetAngularVelocity {id:2,v:[0.0,0.0,60.0]});
+                let mut pieces=Vec::new();
+                for x in 0..(8.0/cell) as i32 { for y in 0..(1.0/cell) as i32 { for z in 0..(2.0/cell) as i32 {
+                    let mut surface=plate(Vec3::new((x as f32+0.5)*cell-4.0,
+                        (y as f32+0.5)*cell-0.5,(z as f32+0.5)*cell-1.0),Vec3::ZERO);
+                    surface.cl=0.0; surface.propeller=22.0; surface.chunky=false; surface.area=cell*cell;
+                    pieces.push(aero_geometry::AeroPiece {surface,size:Vec3::splat(cell)});
+                }}}
+                let k=world.kontras.get_mut(&2).unwrap(); k.aero_mode=mode;
+                k.aero=aero_geometry::panels(pieces);
+                world.step(1.0/60.0);
+                speeds.push(body(&world,1).linvel().z);
+            }
+            assert!(speeds[0]>0.05,"{mode:?} solid slab did not pull: {speeds:?}");
+            assert!(speeds.iter().all(|v| (v-speeds[0]).abs()<1.0e-4),
+                "{mode:?} same slab changes thrust with subdivision: {speeds:?}");
+        }
+    }
+
+    // Full cubes also reverse their axial thrust when the motor reverses.
     #[test]
     fn a_prop_of_full_blocks_pulls_along_its_axle() {
         for vel in [88.0f32, -88.0] {
@@ -5013,7 +6222,7 @@ mod koper_plane_tests {
             let spin = world.build_snapshot().joints[&10][1];
             let v = body(&world, 1).linvel();
             assert!(spin.abs() > 60.0, "cube prop could not spin up: {spin}");
-            assert!(v.z > 3.0, "cube prop spun {vel} did not pull along its axle: {v:?}");
+            assert!(v.z * vel.signum() > 3.0, "cube prop spun {vel} has wrong axial thrust: {v:?}");
         }
     }
 
@@ -5033,7 +6242,7 @@ mod koper_plane_tests {
             let spin = world.build_snapshot().joints[&10][1];
             let v = body(&world, 1).linvel();
             assert!(spin.abs() > 60.0, "cube prop could not spin up under extreme: {spin}");
-            assert!(v.z > 3.0, "cube prop spun {vel} did not pull along its axle under extreme: {v:?}");
+            assert!(v.z * vel.signum() > 3.0, "cube prop spun {vel} has wrong axial thrust under extreme: {v:?}");
         }
     }
 
@@ -5044,9 +6253,12 @@ mod koper_plane_tests {
         let mut world = KhysWorld::new();
         let pos = Vec3::new(0.0, 150.0, 0.0);
         airframe(&mut world, pos);
+        // Nose engine ballast trims the real center of mass against the wing and tail moments.
+        world.set_block_mass(1, [0.0, 0.0, 3.0], 3.0);
         world.kontras.get_mut(&1).unwrap().aero.push(plate(Vec3::new(0.0, 1.0, -4.0), Vec3::X));
         prop(&mut world, 2, 1, pos, Vec3::new(-2.0, 0.0, 1.0), Vec3::Z, 10, 60.0);
         prop(&mut world, 3, 1, pos, Vec3::new(2.0, 0.0, 1.0), Vec3::Z, 11, -60.0);
+        world.process_cmd(PhysicsCmd::JointSetBladeHandedness { joint_id: 11, hand: -1.0 });
         let h = world.kontras[&1].body;
         world.bodies.get_mut(h).unwrap().set_linvel(Vec3::new(0.0, 0.0, 20.0), true);
         for i in 0..600 {
@@ -5167,3 +6379,48 @@ fn flight_sections(start: Vec3,end: Vec3,radius: f32,budget: usize) -> (HashSet<
     }
     (out,true)
 }
+
+#[cfg(test)]
+mod broad_phase_tests {
+    use super::*;
+
+    fn deck(world: &mut KhysWorld, id: i64, at: [f32; 3], liquid_every: usize) {
+        let mut offsets = Vec::new();
+        for x in -2..=2 { for z in -3..=3 { offsets.push([x as f32, 0.0, z as f32]); } }
+        let masses = vec![1.0; offsets.len()];
+        world.spawn_kontraktion_from_offsets(id, offsets.clone(), &masses, 0, at);
+        if liquid_every == 0 { return; }
+        let materials: Vec<[f32; 15]> = offsets.iter().enumerate().map(|(i, o)| {
+            let mut m = [0.0f32; 15];
+            m[0] = 0.6;
+            m[4] = 1.0;
+            m[6] = if i % liquid_every == 0 { -1.0 } else { 0.0 };
+            m[12] = o[0]; m[13] = o[1]; m[14] = o[2];
+            m
+        }).collect();
+        world.set_block_materials(id, &materials);
+    }
+
+    // a deck carrying water (disabled liquid colliders) destroyed, then another body made: the
+    // broad phase BVH rebuild panicked with "key not present" and took the whole game down
+    #[test]
+    fn destroying_a_deck_with_water_slots_keeps_the_broad_phase_sound() {
+        let mut world = KhysWorld::new();
+        for round in 0..20i64 {
+            let id = 1 + round * 2;
+            deck(&mut world, id, [0.0, 150.0, 0.0], 3);
+            for _ in 0..20 { world.step(1.0 / 60.0); }
+            world.destroy_contraption(id);
+            deck(&mut world, id + 1, [-40.0, 200.0, 120.0], 0);
+            for _ in 0..20 { world.step(1.0 / 60.0); }
+            world.destroy_contraption(id + 1);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "control_surface_tests.rs"]
+mod control_surface_tests;
+
+#[path = "aero_geometry.rs"]
+pub mod aero_geometry;

@@ -529,9 +529,18 @@ fn install_koper_api(lua: &Lua) -> LuaResult<()> {
     )?;
     entity_utils.set(
         "teleport",
-        lua.create_function(|lua, (e, x, y, z): (LuaTable, f64, f64, f64)| {
+        lua.create_function(|lua, (e, x, y, z, dim): (LuaTable, f64, f64, f64, Option<String>)| {
             let uuid: String = e.get("_uuid_str").unwrap_or_default();
-            push_cmd(&lua, &format!("teleport:{uuid}:{x:.4},{y:.4},{z:.4}"))
+            match dim {
+                Some(dim) if !dim.is_empty() => {
+                    if dim.contains(':') && !dim.contains(',') && dim.split(':').count() == 2 {
+                        push_cmd(&lua, &format!("teleport:{uuid}:{x:.4},{y:.4},{z:.4},{dim}"))
+                    } else {
+                        Err(mlua::Error::RuntimeError(format!("teleport: \"{dim}\" is not a dimension id like \"mypack:moon\"")))
+                    }
+                }
+                _ => push_cmd(&lua, &format!("teleport:{uuid}:{x:.4},{y:.4},{z:.4}")),
+            }
         })?,
     )?;
     koper.set("entity", entity_utils)?;
@@ -1825,12 +1834,21 @@ pub fn make_entity_table(lua: &Lua, id: &str, health: f64, max_health: f64) -> L
             Ok(t)
         })?,
     )?;
-    // teleport(x, y, z)
+    // teleport(x, y, z [, dimension])
     e.set(
         "teleport",
-        lua.create_function(|lua, (this, x, y, z): (LuaTable, f64, f64, f64)| {
+        lua.create_function(|lua, (this, x, y, z, dim): (LuaTable, f64, f64, f64, Option<String>)| {
             let uuid: String = this.get("_uuid_str").unwrap_or_default();
-            push_cmd(&lua, &format!("teleport:{uuid}:{x:.4},{y:.4},{z:.4}"))
+            match dim {
+                Some(dim) if !dim.is_empty() => {
+                    if dim.contains(':') && !dim.contains(',') && dim.split(':').count() == 2 {
+                        push_cmd(&lua, &format!("teleport:{uuid}:{x:.4},{y:.4},{z:.4},{dim}"))
+                    } else {
+                        Err(mlua::Error::RuntimeError(format!("teleport: \"{dim}\" is not a dimension id like \"mypack:moon\"")))
+                    }
+                }
+                _ => push_cmd(&lua, &format!("teleport:{uuid}:{x:.4},{y:.4},{z:.4}")),
+            }
         })?,
     )?;
     // send_message(text) — chat message to player

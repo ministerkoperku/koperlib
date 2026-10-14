@@ -7,6 +7,7 @@ KoperLib is licensed under the GNU Lesser General Public License v3.0 (`COPYING.
 | Component | Where | License | Notes |
 |---|---|---|---|
 | Rapier 0.32.0 | `engine/rapier3d/` | Apache-2.0 | Modified copy. See `engine/rapier3d/LICENSE` and `engine/rapier3d/MODIFICATIONS.md`. Compiled into the Khysics native library. |
+| parry3d 0.26.1 | `engine/vendor/parry3d/` | Apache-2.0 | Modified copy with BVH fixes from parry 0.30. See `engine/vendor/parry3d/LICENSE` and `engine/vendor/parry3d/MODIFICATIONS.md`. Compiled into the Khysics native library. |
 | rquickjs-sys 0.14.0 and QuickJS | `engine/vendor/rquickjs-sys/` | MIT | Vendored JavaScript engine bindings and sources, used by the Bedrock script layer. License in `engine/vendor/rquickjs-sys/LICENSE`. |
 | GeckoLib Bedrock model and animation math | Kodel (`modules/koperlib-kodel`) | MIT | Clean reimplementation, no upstream files are shipped. Notice reproduced below. |
 

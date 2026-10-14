@@ -109,6 +109,10 @@ public class KoperLib implements ModInitializer {
             com.koper.koper_lib.kui.KuiContainers::onStopping);
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(
             com.koper.koper_lib.state.KoperWorldVault::loadIfNeeded);
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(
+            com.koper.koper_lib.factory.DimensionFactory::holdClocks);
+        com.koper.koper_lib.fullpack.DimensionEntityRules.register();
+        com.koper.koper_lib.fullpack.SpaceBodies.register();
         // bedrock addon scripts want a world to talk to, so they start once there is one
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(
             com.koper.koper_lib.bedrock.BedrockSkrypciarz::serverStarted);

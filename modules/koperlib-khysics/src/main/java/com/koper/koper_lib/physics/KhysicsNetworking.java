@@ -47,6 +47,7 @@ public final class KhysicsNetworking {
         KoperNetwork.clientbound("khysics", KenderUpdatePayload.TYPE, KenderUpdatePayload.CODEC);
         KoperNetwork.clientbound("khysics", KenderRemovePayload.TYPE, KenderRemovePayload.CODEC);
         KoperNetwork.clientbound("khysics", KenderBlockEventPayload.TYPE, KenderBlockEventPayload.CODEC);
+        KoperNetwork.clientbound("khysics", com.koper.koper_lib.network.KontraStandersPayload.TYPE, com.koper.koper_lib.network.KontraStandersPayload.CODEC);
         KoperNetwork.clientbound("khysics", KenderBlockEntityUpdatePayload.TYPE, KenderBlockEntityUpdatePayload.CODEC);
         KoperNetwork.clientbound("khysics", KenderGridBlockUpdatePayload.TYPE, KenderGridBlockUpdatePayload.CODEC);
         KoperNetwork.clientbound("khysics", KenderStampPayload.TYPE, KenderStampPayload.CODEC);
@@ -83,6 +84,8 @@ public final class KhysicsNetworking {
     }
 
     public static void initClient() {
+        ClientPlayNetworking.registerGlobalReceiver(com.koper.koper_lib.network.KontraStandersPayload.TYPE, (payload, context) ->
+            context.client().execute(() -> com.koper.koper_lib.kender.KontraRideClient.standers(payload)));
         ClientPlayNetworking.registerGlobalReceiver(com.koper.koper_lib.network.KontraMotionFramePayload.TYPE, (payload, context) ->
             context.client().execute(() -> com.koper.koper_lib.kender.KontraMotionClient.receive(payload)));
         ClientPlayNetworking.registerGlobalReceiver(KenderStreamPayloads.Start.TYPE, (payload, context) ->

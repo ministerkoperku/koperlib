@@ -10,6 +10,8 @@ import net.minecraft.client.renderer.block.model.BlockDisplayContext;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
+import net.minecraft.gizmos.GizmoPrimitives;
+import net.minecraft.gizmos.Gizmos;
 import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
@@ -52,48 +54,56 @@ public final class KoperAttachmentRenderer {
                     else drawWorldPreview(context, mc, placement.getClickedPos(), state);
                 }
             }
+        });
 
+        // Gizmos must be collected before finalization to enable the pass after Kender's draws.
+        LevelRenderEvents.BEFORE_GIZMOS.register(context -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null || mc.level == null) return;
+            var held = mc.player.getMainHandItem();
             if (!KoperAttachments.isTool(held.getItem())) return;
 
-            for (var spot : KoperAttachmentScan.world(mc, 10, 7)) {
-                KoperAttachmentPoint point = spot.point();
-                point(context, spot.pos().getX() + point.position().x,
-                    spot.pos().getY() + point.position().y,
-                    spot.pos().getZ() + point.position().z,
-                    new Vector3f(point.normal().getStepX(), point.normal().getStepY(),
-                        point.normal().getStepZ()), point.color());
-            }
+            try (var ignored = context.levelRenderer().collectPerFrameRenderThreadGizmos()) {
+                for (var spot : KoperAttachmentScan.world(mc, 10, 7)) {
+                    KoperAttachmentPoint point = spot.point();
+                    point(context, spot.pos().getX() + point.position().x,
+                        spot.pos().getY() + point.position().y,
+                        spot.pos().getZ() + point.position().z,
+                        new Vector3f(point.normal().getStepX(), point.normal().getStepY(),
+                            point.normal().getStepZ()), point.color());
+                }
 
-            long now = System.nanoTime();
-            for (var kontra : com.koper.koper_lib.api.core.KenderMovingGrids.snapshot(now)) {
-                float[] bodyPos = kontra.position();
-                float[] bodyRot = kontra.rotation();
-                if (bodyPos == null || bodyRot == null) continue;
-                var rotation = new org.joml.Quaternionf(bodyRot[0], bodyRot[1], bodyRot[2], bodyRot[3]);
-                int count = Math.min(kontra.states().length, kontra.offsets().length / 3);
-                for (int i = 0; i < count; i++) {
-                    var points = KoperAttachments.points(kontra.states()[i]);
-                    if (points.isEmpty()) continue;
-                    for (KoperAttachmentPoint attachment : points) {
-                        var local = new org.joml.Vector3f(
-                            kontra.offsets()[i * 3] + (float)attachment.position().x - 0.5f,
-                            kontra.offsets()[i * 3 + 1] + (float)attachment.position().y - 0.5f,
-                            kontra.offsets()[i * 3 + 2] + (float)attachment.position().z - 0.5f);
-                        rotation.transform(local);
-                        var normal = new Vector3f(
-                            attachment.normal().getStepX(), attachment.normal().getStepY(),
-                            attachment.normal().getStepZ());
-                        rotation.transform(normal);
-                        point(context, bodyPos[0] + local.x, bodyPos[1] + local.y,
-                            bodyPos[2] + local.z, normal, attachment.color());
+                long now = System.nanoTime();
+                for (var kontra : com.koper.koper_lib.api.core.KenderMovingGrids.snapshot(now)) {
+                    float[] bodyPos = kontra.position();
+                    float[] bodyRot = kontra.rotation();
+                    if (bodyPos == null || bodyRot == null) continue;
+                    var rotation = new org.joml.Quaternionf(bodyRot[0], bodyRot[1], bodyRot[2], bodyRot[3]);
+                    int count = Math.min(kontra.states().length, kontra.offsets().length / 3);
+                    for (int i = 0; i < count; i++) {
+                        var points = KoperAttachments.points(kontra.states()[i]);
+                        if (points.isEmpty()) continue;
+                        for (KoperAttachmentPoint attachment : points) {
+                            var local = new org.joml.Vector3f(
+                                kontra.offsets()[i * 3] + (float)attachment.position().x - 0.5f,
+                                kontra.offsets()[i * 3 + 1] + (float)attachment.position().y - 0.5f,
+                                kontra.offsets()[i * 3 + 2] + (float)attachment.position().z - 0.5f);
+                            rotation.transform(local);
+                            var normal = new Vector3f(
+                                attachment.normal().getStepX(), attachment.normal().getStepY(),
+                                attachment.normal().getStepZ());
+                            rotation.transform(normal);
+                            point(context, bodyPos[0] + local.x, bodyPos[1] + local.y,
+                                bodyPos[2] + local.z, normal, attachment.color());
+                        }
                     }
                 }
-            }
 
-            for (var links : KoperAttachmentOverlayClient.all()) {
-                for (var link : links) {
-                    segment(context, link.from(), link.to(), link.color(), 0.025);
-                    if (link.direction() != 0) arrow(context, link);
+                for (var links : KoperAttachmentOverlayClient.all()) {
+                    for (var link : links) {
+                        segment(context, link.from(), link.to(), link.color(), 0.025);
+                        if (link.direction() != 0) arrow(context, link);
+                    }
                 }
             }
         });
@@ -226,16 +236,32 @@ public final class KoperAttachmentRenderer {
         pose.translate(0f, 0f, 0.006f); // a hair off the face or it z-fights with it
 
         var collector = context.submitNodeCollector().order(1000);
-        var seeThrough = com.koper.koper_lib.api.core.KoperOverlayTypes.seeThroughQuads();
-        if (seeThrough != null) {
-            // dimmed copy that ignores depth — a port buried under a wheel is still findable
-            fan(collector, pose, seeThrough, 0f, DISC_RADIUS, dim(color, 0.4f));
-            fan(collector, pose, seeThrough, DISC_RADIUS * 0.82f, DISC_RADIUS, dim(color, 0.6f));
-        }
+        Vec3 center = new Vec3(x + normal.x * 0.006, y + normal.y * 0.006, z + normal.z * 0.006);
+        Quaternionf rotation = new Quaternionf().rotationTo(new Vector3f(0, 0, 1), normal);
+        Gizmos.addGizmo((primitives, alpha) -> {
+            overlayFan(primitives, center, rotation, 0f, DISC_RADIUS, dim(color, 0.4f * alpha));
+            overlayFan(primitives, center, rotation, DISC_RADIUS * 0.82f, DISC_RADIUS, dim(color, 0.6f * alpha));
+        }).setAlwaysOnTop();
         var solid = RenderTypes.debugFilledBox(); // POSITION_COLOR quads, depth-tested
         fan(collector, pose, solid, 0f, DISC_RADIUS, color);
         fan(collector, pose, solid, DISC_RADIUS * 0.82f, DISC_RADIUS, brighten(color));
         pose.popPose();
+    }
+
+    private static void overlayFan(GizmoPrimitives primitives, Vec3 center, Quaternionf rotation,
+                                   float inner, float outer, int color) {
+        for (int i = 0; i < DISC_SEGMENTS; i++) {
+            double a0 = Math.PI * 2 * i / DISC_SEGMENTS;
+            double a1 = Math.PI * 2 * (i + 1) / DISC_SEGMENTS;
+            primitives.addQuad(discVertex(center, rotation, inner, a0), discVertex(center, rotation, inner, a1),
+                discVertex(center, rotation, outer, a1), discVertex(center, rotation, outer, a0), color);
+        }
+    }
+
+    private static Vec3 discVertex(Vec3 center, Quaternionf rotation, float radius, double angle) {
+        var local = new Vector3f(radius * (float) Math.cos(angle), radius * (float) Math.sin(angle), 0);
+        rotation.transform(local);
+        return center.add(local.x, local.y, local.z);
     }
 
     // circle (inner 0) or ring, as quads: one slice = inner0, inner1, outer1, outer0
@@ -282,32 +308,11 @@ public final class KoperAttachmentRenderer {
         pose.pushPose();
         pose.translate(mid.x - camera.x, mid.y - camera.y, mid.z - camera.z);
         pose.rotate(rotation);
-        var seeThrough = com.koper.koper_lib.api.core.KoperOverlayTypes.seeThroughQuads();
-        if (seeThrough != null) {
-            // a wire that vanishes the moment it passes behind a fender is a wire you cannot follow
-            ribbon(context, pose, seeThrough, (float)(length * 0.5), (float) width, dim(color, 0.4f));
-        }
+        Gizmos.line(from, to, dim(color, 0.4f), 3f).setAlwaysOnTop();
         context.submitNodeCollector().order(900).submitShapeOutline(
             pose, Shapes.box(-length * 0.5, -width, -width, length * 0.5, width, width),
             RenderTypes.linesTranslucent(), color, 3.0f, false);
         pose.popPose();
-    }
-
-    // two crossed quads along local +X — a cable you can see from any angle without billboarding
-    private static void ribbon(net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext context,
-                               com.mojang.blaze3d.vertex.PoseStack pose,
-                               net.minecraft.client.renderer.rendertype.RenderType type,
-                               float half, float width, int color) {
-        context.submitNodeCollector().order(899).submitCustomGeometry(pose, type, (snap, consumer) -> {
-            consumer.addVertex(snap, -half, -width, 0f).setColor(color);
-            consumer.addVertex(snap, half, -width, 0f).setColor(color);
-            consumer.addVertex(snap, half, width, 0f).setColor(color);
-            consumer.addVertex(snap, -half, width, 0f).setColor(color);
-            consumer.addVertex(snap, -half, 0f, -width).setColor(color);
-            consumer.addVertex(snap, half, 0f, -width).setColor(color);
-            consumer.addVertex(snap, half, 0f, width).setColor(color);
-            consumer.addVertex(snap, -half, 0f, width).setColor(color);
-        });
     }
 
     private static void arrow(net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext context,

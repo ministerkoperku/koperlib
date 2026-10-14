@@ -109,15 +109,20 @@ public final class KenderTargeting {
         return targeted != null && (state == null || targeted.getBlock() == state.getBlock());
     }
 
-    // in vanilla you cannot select water: its outline shape is empty and only a bucket's
+    // in vanilla you cannot select water: its outline shape is empty and only an EMPTY bucket's
     // ClipContext.Fluid.SOURCE_ONLY reaches it. here every cell falls back to KGeoBook's full cube,
     // so a puddle on deck was eating the click meant for the planks underneath and you could not
-    // build in it, mine through it, or aim past it. bucket in hand still gets to hit the water.
+    // build in it, mine through it, or aim past it. a full bucket aims through water like vanilla,
+    // otherwise the first puddle on a deck caught every later pour
     private static boolean clickThrough(BlockState state, net.minecraft.world.entity.player.Player player) {
         if (state == null) return true;
         if (!(state.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock)) return false;
-        return !(player.getMainHandItem().getItem() instanceof net.minecraft.world.item.BucketItem)
-            && !(player.getOffhandItem().getItem() instanceof net.minecraft.world.item.BucketItem);
+        return !emptyBucket(player.getMainHandItem()) && !emptyBucket(player.getOffhandItem());
+    }
+
+    private static boolean emptyBucket(net.minecraft.world.item.ItemStack stack) {
+        return stack.getItem() instanceof net.minecraft.world.item.BucketItem bucket
+            && bucket.getContent() == net.minecraft.world.level.material.Fluids.EMPTY;
     }
 
     public static BlockHitResult cameraClip(Vec3 from, Vec3 to, float currentBestDistance) {

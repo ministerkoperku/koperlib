@@ -461,7 +461,8 @@ public final class KoperActions {
             JsonElement data = firstPresent(ctx.json(), "teleport", "tp", "offset");
             Vec3 vec = vector(data, target.getX(), target.getY(), target.getZ());
             if (offset) vec = target.position().add(vec);
-            target.teleportTo(vec.x, vec.y, vec.z);
+            if (ctx.json().has("dimension")) KoperTeleport.to(target, ctx.json().get("dimension").getAsString(), vec.x, vec.y, vec.z);
+            else target.teleportTo(vec.x, vec.y, vec.z);
             return InteractionResult.PASS;
         });
         KoperCalls.register("entity.element", ctx -> {

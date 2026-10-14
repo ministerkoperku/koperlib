@@ -10,4 +10,9 @@ dependencies {
     // Optional at runtime, but when Khysics is present its interpolated target lets the shared
     // placement renderer keep previews attached to moving grids.
     compileOnly project(':koperlib-khysics')
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly project(':koperlib-khysics')
 }
+
+test { useJUnitPlatform() }

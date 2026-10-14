@@ -46,4 +46,10 @@ class ScriptCommandDispatcherTest {
         }
         return out.toString();
     }
+
+    @Test
+    void teleportTakesAnOptionalDimension() {
+        assertEquals(new ScriptCommand.Teleport("u", 1, 2, 3, null), ScriptCommandDispatcher.parse("teleport:u:1.0000,2.0000,3.0000"));
+        assertEquals(new ScriptCommand.Teleport("u", 1, 2, 3, "pack:moon"), ScriptCommandDispatcher.parse("teleport:u:1.0000,2.0000,3.0000,pack:moon"));
+    }
 }

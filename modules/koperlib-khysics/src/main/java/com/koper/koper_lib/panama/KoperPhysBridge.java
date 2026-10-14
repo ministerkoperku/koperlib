@@ -120,6 +120,10 @@ public final class KoperPhysBridge {
     public static int removeBlockAtOffset(long worldId, long kontraId, int lx, int ly, int lz) { if (TRAIL) koperTrail(kontraId, "removeBlockAtOffset" + java.util.Arrays.toString(new Object[]{lx, ly, lz})); return of(worldId).removeBlockAtOffset(worldId, kontraId, lx, ly, lz); }
 
     // sections physics wants but never got — [sx,sy,sz] triples. returns triple count
+    public static int removeBlockAtExactOffset(long worldId, long kontraId, float ox, float oy, float oz) {
+        return of(worldId).removeBlockAtExactOffset(worldId, kontraId, ox, oy, oz);
+    }
+
     public static int wantedSections(long worldId, int[] outBuf, int maxSections) { return of(worldId).wantedSections(worldId, outBuf, maxSections); }
 
     // full 16^3 occupancy of one section — 64 longs, bit idx = (ly*16+lz)*16+lx
@@ -141,6 +145,11 @@ public final class KoperPhysBridge {
     // [ox,oy,oz, nx,ny,nz, area, cd, cl, buoy]. resend on every block change. empty = no aero (clears it).
     public static void setAero(long worldId, long kontraId, float[] surfaces) { of(worldId).setAero(worldId, kontraId, surfaces); }
 
+    // Ten legacy fields followed by propeller coefficient and the piece's XYZ dimensions.
+    public static void setAeroGeometry(long worldId, long kontraId, float[] pieces) {
+        of(worldId).setAeroGeometry(worldId, kontraId, pieces);
+    }
+
     public static void setAeroMode(long worldId, long kontraId, int mode) { of(worldId).setAeroMode(worldId, kontraId, mode); }
 
     // blocks/s, overwrites the body's velocity outright — flight stick control
@@ -159,6 +168,18 @@ public final class KoperPhysBridge {
     // global air velocity for a physics world — relative wind on every body = its velocity minus this
     public static void setWind(long worldId, float wx, float wy, float wz) { of(worldId).setWind(worldId, wx, wy, wz); }
 
+    public static boolean setBodyWind(long worldId, long kontraId, float wx, float wy, float wz) {
+        return of(worldId).setBodyWind(worldId, kontraId, wx, wy, wz);
+    }
+
+    public static boolean setPropReaction(long worldId, float share) {
+        return of(worldId).setPropReaction(worldId, share);
+    }
+
+    public static boolean setAir(long worldId, float density, float seaLevel, float scaleHeight, float minDensity) {
+        return of(worldId).setAir(worldId, density, seaLevel, scaleHeight, minDensity);
+    }
+
     // anchors in each kontra's local block-offset space, axis shared by both local frames.
     // returns the joint id immediately, the joint itself spawns async on the physics thread
     public static long createRevoluteJoint(long worldId, long kontraA, long kontraB, float ax, float ay, float az, float bx, float by, float bz, float axisX, float axisY, float axisZ) { if (TRAIL) { String koperAnchors = " a@" + ax + "," + ay + "," + az + " b@" + bx + "," + by + "," + bz; koperTrail(kontraA, "createRevoluteJoint to " + kontraB + koperAnchors); koperTrail(kontraB, "createRevoluteJoint to " + kontraA + koperAnchors); } return of(worldId).createRevoluteJoint(worldId, kontraA, kontraB, ax, ay, az, bx, by, bz, axisX, axisY, axisZ); }
@@ -169,6 +190,10 @@ public final class KoperPhysBridge {
     public static void jointSetMotor(long worldId, long jointId, float targetVel, float maxForce) {
         if (TRAIL) koperMotorTrail(jointId, "motor " + targetVel + " rad/s force " + maxForce);
         of(worldId).jointSetMotor(worldId, jointId, targetVel, maxForce);
+    }
+
+    public static boolean jointSetBladeHandedness(long worldId, long jointId, float hand) {
+        return of(worldId).jointSetBladeHandedness(worldId, jointId, hand);
     }
 
     // motors get re-sent every tick by vehicles, only a change goes into the trail or it drowns the rest

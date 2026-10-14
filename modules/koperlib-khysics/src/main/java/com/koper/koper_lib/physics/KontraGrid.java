@@ -344,6 +344,13 @@ public final class KontraGrid {
     // and it has to lean on something SOLID. counting a fluid neighbour as hull is how one bucket
     // became a sea: every new cell leaned on the cell that spread it, so the condition was true
     // forever, in all six directions, all the way down to the void. that was the tps.
+    private int fluidCells() {
+        int n = 0;
+        for (BlockState s : entry.blocks.values())
+            if (s.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock) n++;
+        return n;
+    }
+
     private boolean touchesHull(BlockPos local) {
         for (var direction : net.minecraft.core.Direction.values()) {
             BlockState n = entry.blocks.get(local.relative(direction));
@@ -370,18 +377,20 @@ public final class KontraGrid {
     public boolean setBlock(ServerLevel level, BlockPos pos, BlockState state, int flags, int recursionLeft) {
         boolean fluid = !state.isAir() && state.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock;
         BlockPos local = toLocal(pos);
-        // fluids ride the grid now. two rules keep them from being the disaster they were before:
-        // they never replace a block the kontra owns, and they only appear in a cell that already
-        // touches the hull. without the second one a bucket on deck grows water into open sky forever.
+        // fluids ride the grid. three rules keep them from being the disaster they were before: they
+        // never replace a block the kontra owns, they only appear in a cell that already touches the
+        // hull (else a bucket on deck grows water into open sky forever), and a new cell is refused
+        // once the kontra holds kontraFluidCellLimit of them, so flow spreads over a deck like in the
+        // world but one bucket cannot flood a whole ship
         if (fluid) {
-            // ONLY source blocks ride. a flowing state is exactly what FlowingFluid.spread produces,
-            // so refusing them is what stops the spread at the door instead of chasing it afterwards.
-            // water on a kontra is cargo that sits where you poured it, not a simulated ocean.
-            if (!state.getFluidState().isSource()) return false;
             BlockState here = entry.blocks.get(local);
             if (here != null && !(here.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock))
                 return false;
-            if (here == null && !touchesHull(local)) return false;
+            if (here == null) {
+                if (!touchesHull(local)) return false;
+                int limit = KhysicsConfig.get().kontraFluidCellLimit;
+                if (!state.getFluidState().isSource() && (limit <= 0 || fluidCells() >= limit)) return false;
+            }
         }
         BlockState old = entry.blocks.get(local);
         if (old == null) {
@@ -457,8 +466,8 @@ public final class KontraGrid {
                 removed.setRemoved();
             }
             if (off != null)
-                com.koper.koper_lib.panama.KoperPhysBridge.removeBlockAtOffset(entry.worldHandle(), kontraId,
-                    Math.round(off[0]), Math.round(off[1]), Math.round(off[2]));
+                com.koper.koper_lib.panama.KoperPhysBridge.removeBlockAtExactOffset(entry.worldHandle(), kontraId,
+                    off[0], off[1], off[2]);
             entry.invalidateSolidCells();
             entry.invalidateLogicCells();
             finishBlockChange(level, local, old, state, flags, recursionLeft);
@@ -541,10 +550,6 @@ public final class KontraGrid {
 
     public void schedule(BlockPos pos, Object type, int delay, TickPriority priority) {
         if (!(type instanceof Block) && !(type instanceof Fluid)) return;
-        // a grid fluid never spreads (setBlock only takes sources), so its tick can only ever
-        // re-attempt a spread that gets refused. one pool of water was re-queueing a tick per cell
-        // per tick for nothing — dropping them here is most of the tps back.
-        if (type instanceof Fluid) return;
         BlockPos immutable=pos.immutable();
         GridTickKey key=new GridTickKey(immutable,type);
         if(!scheduledKeys.add(key)) {

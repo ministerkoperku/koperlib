@@ -65,6 +65,7 @@ public class KontraEntry {
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet logicChanged = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private final float[] logicStamp = new float[7];
     private volatile boolean logicStampValid;
+    private boolean logicStampAligned;
 
     public it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<BlockState> logicCells() { return logicCells; }
     public BlockPos logicOwner(long cell) { return logicOwners.get(cell); }
@@ -75,7 +76,8 @@ public class KontraEntry {
 
     public it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<BlockState> rebuildLogicCells(float[] pos, float[] rot) {
         float[] stamp = logicStamp;
-        if (logicStampValid && stamp[0]==pos[0] && stamp[1]==pos[1] && stamp[2]==pos[2]
+        boolean snap = aligned;
+        if (logicStampValid && logicStampAligned == snap && stamp[0]==pos[0] && stamp[1]==pos[1] && stamp[2]==pos[2]
                 && stamp[3]==rot[0] && stamp[4]==rot[1] && stamp[5]==rot[2] && stamp[6]==rot[3])
             return logicCells;
         var cells = logicCellScratch;
@@ -100,6 +102,15 @@ public class KontraEntry {
             }
             float[] off = e.getValue();
             KoperPhys.localToWorld(off[0], off[1], off[2], pos, rot, center);
+            // Rust calls a body aligned within a few hundredths of a cell, and a deck resting on
+            // the ground sits ~1e-4 into it. projecting that exact pose gave a block two cells or
+            // none, and an aligned body collides ONLY through these cells: fresh decks you could
+            // walk into. aligned means one block, one cell
+            if (snap) {
+                long cell = BlockPos.asLong((int)Math.floor(center[0]), (int)Math.floor(center[1]), (int)Math.floor(center[2]));
+                if (cells.putIfAbsent(cell, worldState) == null) owners.put(cell, e.getKey());
+                continue;
+            }
             int minX=(int)Math.floor(center[0]-ex+(axisAligned ? 1e-4f : 0f));
             int minY=(int)Math.floor(center[1]-ey+(axisAligned ? 1e-4f : 0f));
             int minZ=(int)Math.floor(center[2]-ez+(axisAligned ? 1e-4f : 0f));
@@ -122,6 +133,7 @@ public class KontraEntry {
         logicCells = cells;
         stamp[0]=pos[0]; stamp[1]=pos[1]; stamp[2]=pos[2];
         stamp[3]=rot[0]; stamp[4]=rot[1]; stamp[5]=rot[2]; stamp[6]=rot[3];
+        logicStampAligned = snap;
         logicStampValid = true;
         return cells;
     }
@@ -170,6 +182,13 @@ public class KontraEntry {
 
     public KontraEntry(String levelKey, long worldHandle,
                            List<BlockState> states, float[] offsets) {
+        this(levelKey, worldHandle, states, offsets, null);
+    }
+
+    public KontraEntry(String levelKey, long worldHandle,
+                       List<BlockState> states, float[] offsets, int[] locals) {
+        if (offsets.length != states.size() * 3 || locals != null && locals.length != offsets.length)
+            throw new IllegalArgumentException("Mismatched block geometry and local keys");
         this.levelKey = levelKey;
         this.worldHandle = worldHandle;
         this.currentOffsets = offsets.clone();
@@ -182,10 +201,12 @@ public class KontraEntry {
         int n = states.size();
         float maxR = 0;
         for (int i = 0; i < n; i++) {
-            int lx = Math.round(offsets[i * 3]);
-            int ly = Math.round(offsets[i * 3 + 1]);
-            int lz = Math.round(offsets[i * 3 + 2]);
+            int lx = locals == null ? Math.round(offsets[i * 3]) : locals[i * 3];
+            int ly = locals == null ? Math.round(offsets[i * 3 + 1]) : locals[i * 3 + 1];
+            int lz = locals == null ? Math.round(offsets[i * 3 + 2]) : locals[i * 3 + 2];
             BlockPos lp = new BlockPos(lx, ly, lz);
+            if (locals != null && blocks.containsKey(lp))
+                throw new IllegalArgumentException("Duplicate local block key " + lp);
             blocks.put(lp, states.get(i));
             blockOffsets.put(lp, new float[]{offsets[i * 3], offsets[i * 3 + 1], offsets[i * 3 + 2]});
             float r = (float)Math.sqrt(offsets[i*3]*offsets[i*3] + offsets[i*3+1]*offsets[i*3+1] + offsets[i*3+2]*offsets[i*3+2]);
@@ -206,7 +227,7 @@ public class KontraEntry {
     public long   worldHandle() { return worldHandle; }
     public float[] offsets()    { return currentOffsets; }
     public int    blockCount()  { return blocks.size(); }
-    public AeroMode aeroMode()  { return aeroOverride != null ? aeroOverride : KoperPhys.defaultAeroMode(); }
+    public AeroMode aeroMode()  { return aeroOverride != null ? aeroOverride : KoperPhys.defaultAeroMode(levelKey()); }
     public AeroMode aeroOverride() { return aeroOverride; }
     public void setAeroMode(AeroMode mode) { aeroOverride = mode; }
 

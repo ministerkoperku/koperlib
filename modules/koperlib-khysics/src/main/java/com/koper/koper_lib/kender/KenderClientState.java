@@ -50,6 +50,10 @@ public class KenderClientState {
         public volatile long      pendingServerTick;
         public volatile boolean   pendingAligned;
         public volatile boolean   hasPending;
+        // every pose the server sent that no client tick has shown yet, oldest first. one slot let a
+        // second packet in the same tick overwrite the first, and the build jumped two ticks at once:
+        // the owner's log had 1368 lost poses and 494 multi tick steps in ten seconds of flight
+        final java.util.concurrent.ConcurrentLinkedDeque<Pose> poseQueue = new java.util.concurrent.ConcurrentLinkedDeque<>();
         public final float[]      offsets;
         // server-side key per block, flat [lx,ly,lz,...]. parallel to states/offsets.
         public final int[]        locals;
@@ -362,9 +366,18 @@ public class KenderClientState {
         }
     }
 
+    record Pose(long tick, float[] pos, float[] rot, boolean aligned) {}
+
+    // a burst can queue a few poses; more than this behind and the oldest are skipped, so a hitch never
+    // turns into a build that keeps lagging behind the server
+    private static final int MAX_QUEUED_POSES = 3;
+
     public static void updateTransform(long id, long serverTick, float[] newPos, float[] newRot, boolean aligned) {
         KontraRenderData d = KONTRAS.get(id);
         if (d == null) return;
+        Pose last = d.poseQueue.peekLast();
+        if (last == null || serverTick > last.tick() || serverTick == 0L)
+            d.poseQueue.addLast(new Pose(serverTick, newPos, newRot, aligned));
         // netty thread only STASHES the pose — it goes live at the next client tick start
         // (latchTick). promoting it mid-tick had two evils: the ride glue and the collision
         // clamp could see two different poses inside one player tick, and the render lerp
@@ -388,6 +401,7 @@ public class KenderClientState {
         d.authoritativePos=currentPos.clone(); d.authoritativeRot=currentRot.clone();
         d.aligned=aligned;
         d.hasPending=false;
+        d.poseQueue.clear(); // the full sync supersedes anything still queued
         d.lastUpdateNanos=d.renderStartNanos=System.nanoTime();
     }
 
@@ -398,10 +412,28 @@ public class KenderClientState {
         long nowNs = System.nanoTime();
         for (KontraRenderData d : KONTRAS.values()) {
             d.invalidateExternalCache();
-            float[] newPos = d.hasPending ? d.pendingPos : null;
-            float[] newRot = d.hasPending ? d.pendingRot : null;
-            d.hasPending = false;
+            // one pose per client tick; a backlog beyond the limit is skipped, not stretched out
+            while (d.poseQueue.size() > MAX_QUEUED_POSES) {
+                d.poseQueue.pollFirst();
+                KontraStutterMeter.arrived(true);
+            }
+            Pose next = d.poseQueue.pollFirst();
+            if (next != null) {
+                d.pendingPos = next.pos();
+                d.pendingRot = next.rot();
+                d.pendingServerTick = next.tick();
+                d.pendingAligned = next.aligned();
+            }
+            float[] newPos = next != null ? next.pos() : null;
+            float[] newRot = next != null ? next.rot() : null;
+            d.hasPending = !d.poseQueue.isEmpty();
             if (newPos == null || newRot == null) {
+                // only a build that is actually moving should have sent a pose this tick
+                if (!d.aligned && d.authoritativePos != null && d.authoritativePrevPos != null
+                        && Math.abs(d.authoritativePos[0] - d.authoritativePrevPos[0])
+                        + Math.abs(d.authoritativePos[1] - d.authoritativePrevPos[1])
+                        + Math.abs(d.authoritativePos[2] - d.authoritativePrevPos[2]) > 0.05f)
+                    KontraStutterMeter.latched(false, d.currServerTick, d.currServerTick);
                 long targetTick = Math.min(d.currServerTick + 1L, d.authoritativeTick + 2L);
                 if (!d.aligned && targetTick > d.currServerTick
                         && d.authoritativeTick > d.authoritativePrevTick) {
@@ -432,6 +464,7 @@ public class KenderClientState {
             long targetTick = d.pendingServerTick <= d.currServerTick && !d.aligned
                     ? Math.min(d.currServerTick + 1L, d.pendingServerTick + 2L)
                     : d.pendingServerTick;
+            if (!d.aligned) KontraStutterMeter.latched(true, d.prevServerTick, targetTick);
             d.currServerTick = targetTick;
             d.currPos = targetTick == d.pendingServerTick ? newPos : predictPosition(d, targetTick);
             d.currRot = targetTick == d.pendingServerTick ? newRot : predictRotation(d, targetTick);
@@ -693,6 +726,8 @@ public class KenderClientState {
         to.pendingServerTick = from.pendingServerTick;
         to.pendingAligned = from.pendingAligned;
         to.hasPending = from.hasPending;
+        to.poseQueue.clear();
+        to.poseQueue.addAll(from.poseQueue);
     }
 
     // one ask per kontra per ~5 heartbeats, whoever noticed the drift
@@ -1156,10 +1191,15 @@ public class KenderClientState {
     }
 
     private static BlockPos localAtWorldCell(KontraRenderData k, BlockPos worldPos, float[] p, float[] r) {
+        return localAtPoint(k, worldPos.getX() + 0.5, worldPos.getY() + 0.5, worldPos.getZ() + 0.5, p, r);
+    }
+
+    // the kontra cell holding a world point under the given pose, null when the point is outside it
+    public static BlockPos localAtPoint(KontraRenderData k, double px, double py, double pz, float[] p, float[] r) {
         if (k.offsets.length < 3) return null;
-        double dx = worldPos.getX() + 0.5 - p[0];
-        double dy = worldPos.getY() + 0.5 - p[1];
-        double dz = worldPos.getZ() + 0.5 - p[2];
+        double dx = px - p[0];
+        double dy = py - p[1];
+        double dz = pz - p[2];
         Float radius = RADII.get(k.id);
         if (radius != null && dx*dx + dy*dy + dz*dz > (radius+1.0)*(radius+1.0)) return null;
         double norm = Math.sqrt((double)r[0]*r[0] + (double)r[1]*r[1] + (double)r[2]*r[2] + (double)r[3]*r[3]);

@@ -21,12 +21,38 @@ public final class KoperLocalData {
         CompoundTag capture(ServerLevel level, BlockPos pos, BlockState state);
         void restore(ServerLevel level, BlockPos pos, BlockState state, CompoundTag data);
 
+        default List<AeroPiece> aeroPieces(BlockState state, CompoundTag data) {
+            return null;
+        }
+
         default Physics physics(BlockState state, CompoundTag data, float fallbackMass) {
             return null;
         }
     }
 
     public record Physics(int resolution, long occupiedCells, float mass) {}
+
+    // Bounds in block coordinates; material supplies the aerodynamic coefficients.
+    public record AeroPiece(float x, float y, float z, float sizeX, float sizeY, float sizeZ,
+                            BlockState material) {}
+
+    public static List<AeroPiece> aeroPieces(BlockState state, CompoundTag data) {
+        if (state == null) return null;
+        List<Entry> entries = PROVIDERS.get(state.getBlock());
+        if (entries == null) return null;
+        for (Entry entry : entries) {
+            CompoundTag value = data == null ? new CompoundTag()
+                    : data.getCompound(entry.key()).orElseGet(CompoundTag::new);
+            try {
+                List<AeroPiece> pieces = entry.provider().aeroPieces(state, value);
+                if (pieces != null) return pieces;
+            } catch (Throwable error) {
+                com.koper.koper_lib.coremod.KoperCore.LOGGER.warn(
+                    "[KoperLocalData] aero {} failed: {}", entry.key(), error.getMessage());
+            }
+        }
+        return null;
+    }
 
     private record Entry(String key, Provider provider) {}
     private static final Map<Block, List<Entry>> PROVIDERS = new IdentityHashMap<>();

@@ -29,134 +29,46 @@ public class DimensionFactory {
         Identifier id = Identifier.tryParse(idStr);
         if (id == null) return;
 
-        KoperDimensionData merged = FactoryUtils.prepare(new KoperDimensionData(), json);
-        merged.name = json.has("name") ? json.get("name").getAsString() : id.getPath();
-
         String ns = id.getNamespace();
         String path = id.getPath();
-
         
-        String baseType = merged.baseType != null ? merged.baseType : "custom";
-
-        
-        boolean hasSkylight, hasCeiling, ultrawarm, natural, bedWorks, piglinSafe, respawnAnchorWorks, hasRaids;
-        double coordScale;
-        float ambientLight;
-        String infiniburn;
-
-        switch (baseType.toLowerCase()) {
-            case "nether" -> {
-                hasSkylight = false; hasCeiling = true; ultrawarm = true; natural = false;
-                bedWorks = false; piglinSafe = true; respawnAnchorWorks = true; hasRaids = false;
-                coordScale = 8.0; ambientLight = 0.1f;
-                infiniburn = "#minecraft:infiniburn_nether";
-            }
-            case "end" -> {
-                hasSkylight = false; hasCeiling = false; ultrawarm = false; natural = false;
-                bedWorks = false; piglinSafe = false; respawnAnchorWorks = false; hasRaids = true;
-                coordScale = 1.0; ambientLight = 0.0f;
-                infiniburn = "#minecraft:infiniburn_end";
-            }
-            default -> { 
-                hasSkylight = true; hasCeiling = false; ultrawarm = false; natural = true;
-                bedWorks = true; piglinSafe = false; respawnAnchorWorks = false; hasRaids = true;
-                coordScale = 1.0; ambientLight = 0.0f;
-                infiniburn = "#minecraft:infiniburn_overworld";
-            }
+        KoperDimensionData merged;
+        DimensionTypeBuilder.Built built;
+        try {
+            merged = FactoryUtils.prepare(new KoperDimensionData(), json);
+            built = DimensionTypeBuilder.build(json, ns, path, DimensionFactory::vanilla);
+        } catch (RuntimeException e) {
+            KoperLib.LOGGER.error("DimensionFactory: dimension {} does not work: {}", idStr, e.getMessage());
+            return;
         }
+        merged.name = json.has("name") ? json.get("name").getAsString() : id.getPath();
+        JsonObject type = built.type();
+        String biome = merged.biome != null ? merged.biome : "minecraft:the_void";
+        String generator = merged.generator != null ? merged.generator : "void";
 
-        
-        String environment = json.has("environment") ? merged.environment :
-                (baseType.equals("nether") ? "nether" : baseType.equals("end") ? "end" : "overworld");
-        hasSkylight = json.has("has_skylight") ? getBool(json, "has_skylight", hasSkylight) : hasSkylight;
-        hasCeiling  = json.has("has_ceiling") ? getBool(json, "has_ceiling", hasCeiling) : hasCeiling;
-        ultrawarm   = json.has("ultrawarm") ? getBool(json, "ultrawarm", ultrawarm) : ultrawarm;
-        natural     = json.has("natural") ? getBool(json, "natural", natural) : natural;
-        bedWorks    = json.has("bed_works") ? getBool(json, "bed_works", bedWorks) : bedWorks;
-        piglinSafe  = json.has("piglin_safe") ? getBool(json, "piglin_safe", piglinSafe) : piglinSafe;
-        respawnAnchorWorks = json.has("respawn_anchor_works") ? getBool(json, "respawn_anchor_works", respawnAnchorWorks) : respawnAnchorWorks;
-        hasRaids    = json.has("has_raids") ? getBool(json, "has_raids", hasRaids) : hasRaids;
-        coordScale  = json.has("coordinate_scale") ? getDouble(json, "coordinate_scale", coordScale) : coordScale;
-        ambientLight = json.has("ambient_light") ? (float) getDouble(json, "ambient_light", ambientLight) : ambientLight;
-
-        int logicalHeight   = json.has("logical_height") ? merged.logicalHeight : 256;
-        int minY            = json.has("min_y") ? merged.minY : -64;
-        int height          = json.has("height") ? merged.height : 384;
-        int monsterSpawnLight = json.has("monster_spawn_light_level")
-            ? getInt(json, "monster_spawn_light_level", 7)
-            : merged.monsterSpawnLight != null ? merged.monsterSpawnLight : 7;
-        String biome        = merged.biome != null ? merged.biome : "minecraft:the_void";
-        String generator    = merged.generator != null ? merged.generator : "void";
-
-        
-        String effects = json.has("effects") && merged.effects != null ? merged.effects : switch (environment.toLowerCase()) {
-            case "nether" -> "minecraft:the_nether";
-            case "end"    -> "minecraft:the_end";
-            default       -> "minecraft:overworld";
-        };
-
-       
-        boolean hasEnderDragonFight = json.has("has_ender_dragon_fight")
-            ? getBool(json, "has_ender_dragon_fight", false)
-            : baseType.equals("end");
-
-        merged.environment = environment;
-        merged.hasSkylight = hasSkylight;
-        merged.hasCeiling = hasCeiling;
-        merged.ultrawarm = ultrawarm;
-        merged.natural = natural;
-        merged.bedWorks = bedWorks;
-        merged.piglinSafe = piglinSafe;
-        merged.respawnAnchorWorks = respawnAnchorWorks;
-        merged.hasRaids = hasRaids;
-        merged.coordinateScale = coordScale;
-        merged.ambientLight = ambientLight;
-        merged.logicalHeight = logicalHeight;
-        merged.minY = minY;
-        merged.height = height;
-        merged.monsterSpawnLight = monsterSpawnLight;
-        merged.effects = effects;
-        merged.hasEnderDragonFight = hasEnderDragonFight;
-        merged.infiniburn = infiniburn;
-        if (json.has("fixed_time")) merged.fixedTime = getInt(json, "fixed_time", 6000);
+        merged.environment = json.has("environment") ? merged.environment
+            : "nether".equalsIgnoreCase(merged.baseType) ? "nether" : "end".equalsIgnoreCase(merged.baseType) ? "end"
+            : "space".equalsIgnoreCase(merged.baseType) ? "space" : "overworld";
+        merged.hasSkylight = type.get("has_skylight").getAsBoolean();
+        merged.hasCeiling = type.get("has_ceiling").getAsBoolean();
+        merged.coordinateScale = type.get("coordinate_scale").getAsDouble();
+        merged.ambientLight = type.get("ambient_light").getAsFloat();
+        merged.logicalHeight = type.get("logical_height").getAsInt();
+        merged.minY = type.get("min_y").getAsInt();
+        merged.height = type.get("height").getAsInt();
+        merged.monsterSpawnLight = type.get("monster_spawn_light_level").getAsInt();
+        merged.hasEnderDragonFight = type.get("has_ender_dragon_fight").getAsBoolean();
+        merged.infiniburn = type.get("infiniburn").getAsString();
+        merged.skybox = type.has("skybox") ? type.get("skybox").getAsString() : "overworld";
+        merged.fixedTime = built.fixedTime();
+        merged.clock = built.clock();
         DIMENSION_DATA.put(id, merged);
 
-        
-        String dimTypeJson = """
-            {
-              "ultrawarm": %b,
-              "natural": %b,
-              "piglin_safe": %b,
-              "respawn_anchor_works": %b,
-              "bed_works": %b,
-              "coordinate_scale": %s,
-              "has_skylight": %b,
-              "has_ceiling": %b,
-              "ambient_light": %s,
-              "fixed_time": %s,
-              "monster_spawn_light_level": %d,
-              "monster_spawn_block_light_limit": 0,
-              "has_raids": %b,
-              "has_ender_dragon_fight": %b,
-              "logical_height": %d,
-              "min_y": %d,
-              "height": %d,
-              "infiniburn": "%s",
-              "effects": "%s"
-            }
-            """.formatted(ultrawarm, natural, piglinSafe, respawnAnchorWorks, bedWorks,
-                          coordScale, hasSkylight, hasCeiling, ambientLight,
-                          json.has("fixed_time") ? String.valueOf(getInt(json, "fixed_time", 6000)) : "false",
-                          monsterSpawnLight, hasRaids, hasEnderDragonFight,
-                          logicalHeight, minY, height, infiniburn, effects);
-
-        
-        dimTypeJson = dimTypeJson.replace("\"fixed_time\": false,\n", "");
-
         KoperLib.VIRTUAL_PACK.addServerAsset(
-            Identifier.fromNamespaceAndPath(ns, "dimension_type/" + path + ".json"), dimTypeJson);
+            Identifier.fromNamespaceAndPath(ns, "dimension_type/" + path + ".json"), GSON.toJson(type));
+        built.files().forEach((file, content) -> KoperLib.VIRTUAL_PACK.addServerAsset(
+            Identifier.fromNamespaceAndPath(ns, file), GSON.toJson(content)));
 
-        
         String generatorJson = merged.generatorJson != null ? GSON.toJson(merged.generatorJson) : switch (generator.toLowerCase()) {
             case "flat" -> """
                 {
@@ -226,13 +138,36 @@ public class DimensionFactory {
     private static String getString(JsonObject j, String key, String def) {
         return j.has(key) ? j.get(key).getAsString() : def;
     }
-    private static boolean getBool(JsonObject j, String key, boolean def) {
-        return j.has(key) ? j.get(key).getAsBoolean() : def;
+    private static final Map<String, JsonObject> VANILLA = new java.util.concurrent.ConcurrentHashMap<>();
+
+    // vanilla data files straight out of the game jar, e.g. "dimension_type/overworld"
+    static JsonObject vanilla(String file) {
+        return VANILLA.computeIfAbsent(file, f -> {
+            String path = "/data/minecraft/" + f + ".json";
+            try (var in = net.minecraft.server.MinecraftServer.class.getResourceAsStream(path)) {
+                if (in == null) throw new IllegalStateException("vanilla " + path + " is not in the game jar");
+                return com.google.gson.JsonParser.parseReader(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("vanilla " + path + " could not be read", e);
+            }
+        }).deepCopy();
     }
-    private static int getInt(JsonObject j, String key, int def) {
-        return j.has(key) ? j.get(key).getAsInt() : def;
-    }
-    private static double getDouble(JsonObject j, String key, double def) {
-        return j.has(key) ? j.get(key).getAsDouble() : def;
+
+    // a dimension with "fixed_time" owns a clock; hold it at that tick. runs at every server start
+    // because the clock state lives in the world save and "/time" can move it
+    public static void holdClocks(net.minecraft.server.MinecraftServer server) {
+        var clocks = server.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.WORLD_CLOCK);
+        DIMENSION_DATA.forEach((id, data) -> {
+            if (data.clock == null || data.fixedTime == null) return;
+            var key = net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.WORLD_CLOCK,
+                Identifier.parse(data.clock));
+            var clock = clocks.get(key);
+            if (clock.isEmpty()) {
+                KoperLib.LOGGER.error("DimensionFactory: fixed_time does not work for {}: clock {} is not registered", id, data.clock);
+                return;
+            }
+            server.clockManager().setTotalTicks(clock.get(), data.fixedTime);
+            server.clockManager().setPaused(clock.get(), true);
+        });
     }
 }

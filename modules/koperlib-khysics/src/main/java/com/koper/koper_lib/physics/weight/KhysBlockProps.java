@@ -7,7 +7,14 @@ package com.koper.koper_lib.physics.weight;
 // in mass units — rises to a density-altitude). buoyancyVolume is for WATER, separate from balloonLift.
 public record KhysBlockProps(float mass, float friction, float restitution, float fragilityImpulse,
                              float buoyancyVolume, boolean aero, float dragCoeff, float liftCoeff,
-                             float balloonLift, boolean wheel) {
+                             float balloonLift, boolean wheel, float propellerCoefficient) {
+
+    public KhysBlockProps(float mass, float friction, float restitution, float fragilityImpulse,
+                          float buoyancyVolume, boolean aero, float dragCoeff, float liftCoeff,
+                          float balloonLift, boolean wheel) {
+        this(mass, friction, restitution, fragilityImpulse, buoyancyVolume, aero, dragCoeff, liftCoeff,
+                balloonLift, wheel, liftCoeff);
+    }
 
     public static final KhysBlockProps DEFAULT = new KhysBlockProps(1.0f, 0.6f, 0.2f, 9999f, 1.0f, false, 1.0f, 0.0f, 0.0f, false);
 
@@ -21,6 +28,7 @@ public record KhysBlockProps(float mass, float friction, float restitution, floa
         dragCoeff = Math.max(0f, dragCoeff);
         liftCoeff = Math.max(0f, liftCoeff);
         balloonLift = Math.max(0f, balloonLift);
+        propellerCoefficient = Math.max(0f, propellerCoefficient);
     }
 
     public boolean isWing()    { return liftCoeff > 0f; }

@@ -25,6 +25,7 @@ public class UniversalLoader {
         java.util.Map.entry("mobs", "entity"),
         java.util.Map.entry("spawn_eggs", "spawn_egg"),
         java.util.Map.entry("dimensions", "dimension"),
+        java.util.Map.entry("space_bodies", "space_body"),
         java.util.Map.entry("potions", "potion"),
         java.util.Map.entry("effects", "effect"),
         java.util.Map.entry("status_effects", "effect"),
@@ -428,6 +429,9 @@ public class UniversalLoader {
 
                 case "dimension" ->
                     com.koper.koper_lib.factory.DimensionFactory.createAndRegister(json);
+
+                case "space_body" ->
+                    com.koper.koper_lib.fullpack.SpaceBodies.load(json, sourceName);
 
                 case "potion" ->
                     com.koper.koper_lib.factory.PotionFactory.createAndRegister(json);

@@ -31,6 +31,13 @@ public class KoperDimensionData implements KoperData {
     public Integer monsterSpawnLight;
     public String infiniburn;
     public Integer fixedTime;
+    public String skybox;
+    public String clock;
+    // multipliers for living entities inside this dimension, null = untouched
+    public Double entityGravity;
+    public Double entityJump;
+    public Double entityFallDamage;
+    public Double entitySafeFall;
 
     @Override
     public void applyDefaults() {
@@ -92,8 +99,24 @@ public class KoperDimensionData implements KoperData {
         if (json.has("respawn_anchor_works")) this.respawnAnchorWorks = json.get("respawn_anchor_works").getAsBoolean();
         if (json.has("has_raids")) this.hasRaids = json.get("has_raids").getAsBoolean();
         if (json.has("has_ender_dragon_fight")) this.hasEnderDragonFight = json.get("has_ender_dragon_fight").getAsBoolean();
-        if (json.has("monster_spawn_light")) this.monsterSpawnLight = json.get("monster_spawn_light").getAsInt();
+        if (json.has("monster_spawn_light_level")) this.monsterSpawnLight = json.get("monster_spawn_light_level").getAsInt();
+        else if (json.has("monster_spawn_light")) this.monsterSpawnLight = json.get("monster_spawn_light").getAsInt();
         if (json.has("infiniburn")) this.infiniburn = json.get("infiniburn").getAsString();
         if (json.has("fixed_time")) this.fixedTime = json.get("fixed_time").getAsInt();
+        if (json.has("entity")) {
+            JsonObject entity = json.getAsJsonObject("entity");
+            this.entityGravity = multiplier(entity, "gravity");
+            this.entityJump = multiplier(entity, "jump");
+            this.entityFallDamage = multiplier(entity, "fall_damage");
+            this.entitySafeFall = multiplier(entity, "safe_fall");
+        }
+    }
+
+    private static Double multiplier(JsonObject json, String key) {
+        if (!json.has(key)) return null;
+        double value = json.get(key).getAsDouble();
+        if (!Double.isFinite(value) || value < 0)
+            throw new IllegalArgumentException("\"entity\"." + key + " must be a finite number >= 0, got " + value);
+        return value;
     }
 }

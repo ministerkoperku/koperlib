@@ -48,6 +48,11 @@ class KoperDimensionDataWrapper implements KoperDimensionRef {
     @Override public int monsterSpawnLight() { return data.monsterSpawnLight != null ? data.monsterSpawnLight : 7; }
     @Override public String infiniburn()  { return data.infiniburn != null ? data.infiniburn : "#minecraft:infiniburn_overworld"; }
     @Override public int fixedTime()     { return data.fixedTime != null ? data.fixedTime : -1; }
+    @Override public String skybox()      { return data.skybox != null ? data.skybox : "overworld"; }
+    @Override public double entityGravity()   { return data.entityGravity != null ? data.entityGravity : 1.0; }
+    @Override public double entityJump()      { return data.entityJump != null ? data.entityJump : 1.0; }
+    @Override public double entityFallDamage(){ return data.entityFallDamage != null ? data.entityFallDamage : 1.0; }
+    @Override public double entitySafeFall()  { return data.entitySafeFall != null ? data.entitySafeFall : 1.0; }
 
     @Override
     public boolean isPackEnabled() {

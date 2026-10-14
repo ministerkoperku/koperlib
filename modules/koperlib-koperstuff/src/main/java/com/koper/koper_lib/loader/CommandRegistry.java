@@ -161,6 +161,14 @@ public class CommandRegistry {
 
             // physics commands
             root.then(Commands.literal("physics")
+                .then(Commands.literal("scene")
+                    .then(Commands.argument("name", StringArgumentType.word())
+                        .suggests((ctx, builder) -> {
+                            for (String n : com.koper.koper_lib.core.KhysicsScenes.NAMES) builder.suggest(n);
+                            return builder.buildFuture();
+                        })
+                        .executes(ctx -> com.koper.koper_lib.core.KhysicsScenes.build(ctx.getSource(),
+                            StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("make")
                     .executes(ctx -> executePhysicsMake(ctx.getSource()))
                     // wand-free variant: two corners straight from the command line, so scripts

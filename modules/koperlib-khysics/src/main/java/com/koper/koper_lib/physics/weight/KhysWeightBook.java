@@ -54,7 +54,7 @@ public final class KhysWeightBook {
             float mass = (float) weigher.weigh(s, props.mass());
             return new KhysBlockProps(mass, props.friction(), props.restitution(), props.fragilityImpulse(),
                 props.buoyancyVolume(), props.aero(), props.dragCoeff(), props.liftCoeff(),
-                props.balloonLift(), props.wheel());
+                props.balloonLift(), props.wheel(), props.propellerCoefficient());
         });
     }
 
@@ -131,11 +131,12 @@ public final class KhysWeightBook {
         float buoyancy     = getFloat(json, "buoyancy_volume",   KhysBlockProps.DEFAULT.buoyancyVolume());
         float drag         = getFloat(json, "drag",              KhysBlockProps.DEFAULT.dragCoeff());
         float lift         = getFloat(json, "lift",              KhysBlockProps.DEFAULT.liftCoeff());
+        float propeller    = getFloat(json, "propeller", lift);
         float balloon      = getFloat(json, "balloon",           KhysBlockProps.DEFAULT.balloonLift());
         // aero defaults on when the pack gives this block a wing (lift) or balloon — else opt in with "aero": true
-        boolean aero       = json.has("aero") ? json.get("aero").getAsBoolean() : (lift > 0f || balloon > 0f);
+        boolean aero       = json.has("aero") ? json.get("aero").getAsBoolean() : (lift > 0f || propeller > 0f || balloon > 0f);
         boolean wheel      = json.has("wheel") && json.get("wheel").getAsBoolean();
-        return new KhysBlockProps(mass, friction, restitution, fragility, buoyancy, aero, drag, lift, balloon, wheel);
+        return new KhysBlockProps(mass, friction, restitution, fragility, buoyancy, aero, drag, lift, balloon, wheel, propeller);
     }
 
     private static float getFloat(JsonObject json, String key, float fallback) {

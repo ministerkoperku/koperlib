@@ -84,6 +84,9 @@ public interface PhysKoperer {
     int addBlockAtOffset(long worldId, long kontraId, float ox, float oy, float oz, float mass);
 
     int removeBlockAtOffset(long worldId, long kontraId, int lx, int ly, int lz);
+    default int removeBlockAtExactOffset(long worldId, long kontraId, float ox, float oy, float oz) {
+        return removeBlockAtOffset(worldId, kontraId, Math.round(ox), Math.round(oy), Math.round(oz));
+    }
 
     void setVelocity(long worldId, long kontraId, float vx, float vy, float vz);
 
@@ -138,6 +141,8 @@ public interface PhysKoperer {
 
     void jointSetMotor(long worldId, long jointId, float targetVel, float maxForce);
 
+    default boolean jointSetBladeHandedness(long worldId, long jointId, float hand) { return false; }
+
     void jointSetLimits(long worldId, long jointId, float min, float max);
 
     void jointClearLimits(long worldId, long jointId);
@@ -167,9 +172,26 @@ public interface PhysKoperer {
     // [ox,oy,oz, nx,ny,nz, area, cd, cl, buoy] per aero-tagged block
     default void setAero(long worldId, long kontraId, float[] surfaces) {}
 
+    // Legacy backends retain their ten-float format; geometry-aware backends override this.
+    default void setAeroGeometry(long worldId, long kontraId, float[] pieces) {
+        float[] legacy = new float[pieces.length / 14 * 10];
+        for (int i = 0; i < legacy.length / 10; i++)
+            System.arraycopy(pieces, i * 14, legacy, i * 10, 10);
+        setAero(worldId, kontraId, legacy);
+    }
+
     default void setAeroMode(long worldId, long kontraId, int mode) {}
 
     default void setWind(long worldId, float wx, float wy, float wz) {}
+
+    /** Local wind for one body; non-finite clears it. False when the backend has no per body wind. */
+    default boolean setBodyWind(long worldId, long kontraId, float wx, float wy, float wz) { return false; }
+
+    /** Share of propeller drag torque that reaches the airframe. False when unsupported. */
+    default boolean setPropReaction(long worldId, float share) { return false; }
+
+    /** The dimension's air. False when the backend has no air model. */
+    default boolean setAir(long worldId, float density, float seaLevel, float scaleHeight, float minDensity) { return false; }
 
     default void uploadSectionFluids(long worldId, int sx, int sy, int sz, long[] bits) {}
 

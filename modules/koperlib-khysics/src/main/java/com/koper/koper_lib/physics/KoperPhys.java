@@ -190,12 +190,11 @@ public class KoperPhys {
         return WORLD_HANDLES.computeIfAbsent(levelKey(level), k -> {
             long wh = KoperPhysBridge.createWorld();
             if (wh > 0) {
-                var dim = com.koper.koper_lib.physics.dim.KhysDimensions.getFor(level.dimension().identifier().toString());
-                KoperPhysBridge.setGravity(wh, dim.gravity()[0], dim.gravity()[1], dim.gravity()[2]);
-                KoperPhysBridge.configureAtmosphere(wh,dim.universalDrag());
-                if (!KoperPhysBridge.configureFlight(wh, dim.flight().fastFlight(), (float)dim.flight().maxSpeed(), level.getMinY() >> 4, (level.getMaxY()-1) >> 4) && dim.flight().fastFlight()) {
+                try {
+                    com.koper.koper_lib.physics.dim.KhysDimensions.configure(wh, level);
+                } catch (IllegalStateException failed) {
                     KoperPhysBridge.destroyWorld(wh);
-                    throw new IllegalStateException("fast flight requires a compatible Rapier native backend");
+                    throw failed;
                 }
             }
             if (wh <= 0) com.koper.koper_lib.coremod.KoperCore.LOGGER.error("[KoperPhys] createWorld() returned {} — Rust DLL missing koper_khysics_* exports! Run: cd engine && cargo build --release", wh);
@@ -1038,33 +1037,48 @@ public class KoperPhys {
     // contribute nothing. each surface = local offset, lift normal (local up), 1 m² area, Cd, Cl (WING
     // lift from motion), buoy (BALLOON air-buoyancy). resend on every block change; empty clears the aero.
     public static void pushAero(long kontraId, KontraEntry data) {
-        int count = 0;
-        for (BlockState bs : data.blocks.values()) if (KhysWeightBook.get(bs).aero()) count++;
-
-        float[] surf = new float[count * 10];
-        int i = 0;
+        java.util.List<Float> values = new java.util.ArrayList<>();
         for (var e : data.blocks.entrySet()) {
-            var p = KhysWeightBook.get(e.getValue());
-            if (!p.aero()) continue;
             float[] off = data.blockOffsets.get(e.getKey());
             float ox = off != null ? off[0] : e.getKey().getX();
             float oy = off != null ? off[1] : e.getKey().getY();
             float oz = off != null ? off[2] : e.getKey().getZ();
-            float[] plate = koperPlateOf(e.getValue(), data.localData.get(e.getKey()));
-            int b = i * 10;
-            surf[b]   = ox + plate[4];  surf[b+1] = oy + plate[5];  surf[b+2] = oz + plate[6];
-            surf[b+3] = plate[0];  surf[b+4] = plate[1];  surf[b+5] = plate[2];
-            surf[b+6] = plate[3];
-            surf[b+7] = p.dragCoeff();
-            surf[b+8] = p.liftCoeff();
-            surf[b+9] = p.balloonLift();
-            i++;
+            var pieces = com.koper.koper_lib.api.local.KoperLocalData.aeroPieces(
+                    e.getValue(), data.localData.get(e.getKey()));
+            if (pieces != null) {
+                for (var piece : pieces) addAeroPiece(values, ox, oy, oz, piece);
+            } else {
+                var props = KhysWeightBook.get(e.getValue());
+                if (!props.aero()) continue;
+                var boxes = com.koper.koper_lib.physics.shape.KhysShapeCache.get(
+                        e.getValue(), data.localData.get(e.getKey()));
+                if (boxes == null || boxes.isEmpty()) {
+                    addAeroPiece(values, ox, oy, oz, new com.koper.koper_lib.api.local.KoperLocalData.AeroPiece(
+                            0, 0, 0, 1, 1, 1, e.getValue()));
+                } else for (var box : boxes) {
+                    addAeroPiece(values, ox, oy, oz, new com.koper.koper_lib.api.local.KoperLocalData.AeroPiece(
+                            (float)box.minX, (float)box.minY, (float)box.minZ,
+                            (float)(box.maxX-box.minX), (float)(box.maxY-box.minY),
+                            (float)(box.maxZ-box.minZ), e.getValue()));
+                }
+            }
         }
-        if (com.koper.koper_lib.config.KoperLibConfig.get().debugMode)
-            com.koper.koper_lib.coremod.KoperCore.LOGGER.info("[Aero] kontra {} → {} aero blocks ({} total)", kontraId, count, data.blocks.size());
-        KoperPhysBridge.setAero(data.worldHandle(), kontraId, surf);
+        float[] surf = new float[values.size()];
+        for (int i = 0; i < surf.length; i++) surf[i] = values.get(i);
+        KoperPhysBridge.setAeroGeometry(data.worldHandle(), kontraId, surf);
         KoperPhysBridge.setAeroMode(data.worldHandle(), kontraId, data.aeroMode().id());
         pushBuoy(kontraId, data);
+    }
+
+    private static void addAeroPiece(java.util.List<Float> out, float ox, float oy, float oz,
+            com.koper.koper_lib.api.local.KoperLocalData.AeroPiece piece) {
+        var p = KhysWeightBook.get(piece.material());
+        if (!p.aero()) return;
+        float x = piece.sizeX(), y = piece.sizeY(), z = piece.sizeZ();
+        float[] values = {ox + piece.x() + x/2 - 0.5f, oy + piece.y() + y/2 - 0.5f,
+                oz + piece.z() + z/2 - 0.5f, 0, 0, 0, x*z,
+                p.dragCoeff(), p.liftCoeff(), p.balloonLift(), p.propellerCoefficient(), x, y, z};
+        for (float value : values) out.add(value);
     }
 
     // which way a block faces the air: a thin plate (a micro block layer, a slab, a pressure plate)
@@ -1205,7 +1219,11 @@ public class KoperPhys {
     // place. Capture and respawn it with the EXACT poses instead: nothing is rounded, nothing is lost.
 
     public record BodySnap(List<BlockState> states, float[] offsets, float[] pos, float[] rot,
-                           net.minecraft.nbt.CompoundTag[] blockEntityTags) {
+                           net.minecraft.nbt.CompoundTag[] blockEntityTags, int[] locals) {
+        public BodySnap(List<BlockState> states, float[] offsets, float[] pos, float[] rot,
+                        net.minecraft.nbt.CompoundTag[] blockEntityTags) {
+            this(states, offsets, pos, rot, blockEntityTags, null);
+        }
         public BodySnap(List<BlockState> states, float[] offsets, float[] pos, float[] rot) {
             this(states, offsets, pos, rot, new net.minecraft.nbt.CompoundTag[states.size()]);
         }
@@ -1216,7 +1234,18 @@ public class KoperPhys {
                             float motorVelocity, float motorForce,
                             float motorTarget, float motorStiffness,
                             float motorDamping, float motorMaxForce,
-                            boolean forceBasedPositionMotor) {
+                            boolean forceBasedPositionMotor, float bladeHand) {
+        public JointSnap(int a, int b, float[] anchorA, float[] anchorB, float[] axis,
+                         boolean prismatic, float limitMin, float limitMax,
+                         float motorVelocity, float motorForce,
+                         float motorTarget, float motorStiffness,
+                         float motorDamping, float motorMaxForce,
+                         boolean forceBasedPositionMotor) {
+            this(a, b, anchorA, anchorB, axis, prismatic, limitMin, limitMax,
+                motorVelocity, motorForce, motorTarget, motorStiffness,
+                motorDamping, motorMaxForce, forceBasedPositionMotor, 1f);
+        }
+
         public JointSnap(int a, int b, float[] anchorA, float[] anchorB, float[] axis,
                          boolean prismatic, float limitMin, float limitMax,
                          float motorVelocity, float motorForce,
@@ -1224,13 +1253,13 @@ public class KoperPhys {
                          float motorDamping, float motorMaxForce) {
             this(a, b, anchorA, anchorB, axis, prismatic, limitMin, limitMax,
                 motorVelocity, motorForce, motorTarget, motorStiffness,
-                motorDamping, motorMaxForce, false);
+                motorDamping, motorMaxForce, false, 1f);
         }
 
         public JointSnap(int a, int b, float[] anchorA, float[] anchorB, float[] axis,
                          boolean prismatic, float limitMin, float limitMax) {
             this(a, b, anchorA, anchorB, axis, prismatic, limitMin, limitMax,
-                0f, 0f, Float.NaN, 0f, 0f, 0f, false);
+                0f, 0f, Float.NaN, 0f, 0f, 0f, false, 1f);
         }
     }
 
@@ -1245,6 +1274,38 @@ public class KoperPhys {
             for (BodySnap body : bodies) total += body.states().size();
             return total;
         }
+    }
+
+    /**
+     * One root per free assembly in a level: the lowest body id of each joint island. Islands tied to
+     * the world by a joint are left out, they cannot travel.
+     */
+    public static List<Long> freeAssemblyRoots(ServerLevel level) {
+        String key = levelKey(level);
+        Map<Long, Long> parent = new HashMap<>();
+        for (var entry : KONTRAS.entrySet()) if (key.equals(entry.getValue().levelKey())) parent.put(entry.getKey(), entry.getKey());
+        if (parent.isEmpty()) return List.of();
+        Set<Long> anchored = new HashSet<>();
+        for (JointSpec spec : JOINT_SPECS.values()) {
+            boolean a = parent.containsKey(spec.a()), b = parent.containsKey(spec.b());
+            if (spec.b() == 0L) { if (a) anchored.add(spec.a()); continue; }
+            if (a && b) {
+                long ra = islandRoot(parent, spec.a()), rb = islandRoot(parent, spec.b());
+                if (ra != rb) parent.put(Math.max(ra, rb), Math.min(ra, rb));
+            }
+        }
+        Set<Long> blocked = new HashSet<>();
+        for (long id : anchored) blocked.add(islandRoot(parent, id));
+        Set<Long> roots = new TreeSet<>();
+        for (long id : parent.keySet()) { long root = islandRoot(parent, id); if (!blocked.contains(root)) roots.add(root); }
+        return List.copyOf(roots);
+    }
+
+    private static long islandRoot(Map<Long, Long> parent, long id) {
+        long root = id;
+        while (parent.get(root) != root) root = parent.get(root);
+        while (parent.get(id) != root) { long next = parent.get(id); parent.put(id, root); id = next; }
+        return root;
     }
 
     public static List<Long> assemblyOf(long rootId) {
@@ -1303,7 +1364,7 @@ public class KoperPhys {
                 .mul(new org.joml.Quaternionf(rot[0], rot[1], rot[2], rot[3]).normalize());
             snaps.add(new BodySnap(List.copyOf(render.states()), render.offsets().clone(),
                 new float[]{delta.x, delta.y, delta.z},
-                new float[]{relative.x, relative.y, relative.z, relative.w}, tags));
+                new float[]{relative.x, relative.y, relative.z, relative.w}, tags, render.locals().clone()));
         }
 
         List<JointSnap> joints = new ArrayList<>();
@@ -1321,7 +1382,8 @@ public class KoperPhys {
                 position != null ? position.stiffness() : 0f,
                 position != null ? position.damping() : 0f,
                 position != null ? position.maxForce() : 0f,
-                position != null && position.forceBased()));
+                position != null && position.forceBased(),
+                jointBladeHand(savedJoint.getKey())));
         }
         return new AssemblySnap(List.copyOf(snaps), List.copyOf(joints), rootRot.clone());
     }
@@ -1344,7 +1406,8 @@ public class KoperPhys {
                 states.add(state);
             }
             bodies.add(new BodySnap(List.copyOf(states), body.offsets().clone(),
-                body.pos().clone(), body.rot().clone(), copyTags(body.blockEntityTags())));
+                body.pos().clone(), body.rot().clone(), copyTags(body.blockEntityTags()),
+                body.locals() == null ? null : body.locals().clone()));
         }
 
         org.joml.Vector3f[] positions = new org.joml.Vector3f[bodies.size()];
@@ -1398,7 +1461,7 @@ public class KoperPhys {
             org.joml.Quaternionf rot = rotations[i];
             bodies.set(i, new BodySnap(body.states(), body.offsets(),
                 new float[]{pos.x, pos.y, pos.z},
-                new float[]{rot.x, rot.y, rot.z, rot.w}, body.blockEntityTags()));
+                new float[]{rot.x, rot.y, rot.z, rot.w}, body.blockEntityTags(), body.locals()));
         }
         return new AssemblySnap(List.copyOf(bodies), snap.joints(),
             snap.rootRot() == null ? null : snap.rootRot().clone());
@@ -1438,7 +1501,7 @@ public class KoperPhys {
                 new org.joml.Vector3f(body.pos()[0], body.pos()[1], body.pos()[2]));
             org.joml.Quaternionf rot = new org.joml.Quaternionf(base).mul(
                 new org.joml.Quaternionf(body.rot()[0], body.rot()[1], body.rot()[2], body.rot()[3]));
-            ids[i] = spawnBody(level, body.states(), body.offsets(), body.blockEntityTags(),
+            ids[i] = spawnBody(level, body.states(), body.offsets(), body.blockEntityTags(), body.locals(),
                 where[0] + at.x, where[1] + at.y, where[2] + at.z,
                 new float[]{rot.x, rot.y, rot.z, rot.w});
             if (ids[i] <= 0) {
@@ -1468,6 +1531,10 @@ public class KoperPhys {
             if (id > 0 && Float.isFinite(joint.motorTarget()) && joint.motorMaxForce() > 0f)
                 setJointMotorPosition(id, joint.motorTarget(), joint.motorStiffness(),
                     joint.motorDamping(), joint.motorMaxForce(), joint.forceBasedPositionMotor());
+            // the hand is part of the prop, not of whoever drives it. a parked or lifted mirrored rotor
+            // must not run its first steps with normal blades
+            if (id > 0 && joint.bladeHand() == -1f && !joint.prismatic())
+                setJointBladeHandedness(id, -1f);
         }
         return ids;
     }
@@ -1503,7 +1570,13 @@ public class KoperPhys {
     public static long spawnBody(ServerLevel level, List<BlockState> states, float[] offsets,
                                  net.minecraft.nbt.CompoundTag[] blockEntityTags,
                                  float cx, float cy, float cz, float[] rot) {
-        if (states.isEmpty() || offsets.length != states.size() * 3) {
+        return spawnBody(level, states, offsets, blockEntityTags, null, cx, cy, cz, rot);
+    }
+
+    private static long spawnBody(ServerLevel level, List<BlockState> states, float[] offsets,
+                                  net.minecraft.nbt.CompoundTag[] blockEntityTags, int[] locals,
+                                  float cx, float cy, float cz, float[] rot) {
+        if (states.isEmpty() || offsets.length != states.size() * 3 || locals != null && locals.length != offsets.length) {
             com.koper.koper_lib.coremod.KoperCore.LOGGER.warn(
                 "[KoperPhys] spawnBody refused: {} states but {} offset floats", states.size(), offsets.length);
             return -1L;
@@ -1514,9 +1587,11 @@ public class KoperPhys {
             List<BlockState> kept = new ArrayList<>();
             List<net.minecraft.nbt.CompoundTag> tags = new ArrayList<>();
             float[] keptOffsets = new float[offsets.length];
+            int[] keptLocals = locals == null ? null : new int[locals.length];
             for (int i = 0; i < states.size(); i++) {
                 if (states.get(i).isAir()) continue;
                 System.arraycopy(offsets, i * 3, keptOffsets, kept.size() * 3, 3);
+                if (keptLocals != null) System.arraycopy(locals, i * 3, keptLocals, kept.size() * 3, 3);
                 kept.add(states.get(i));
                 tags.add(blockEntityTags != null && i < blockEntityTags.length ? blockEntityTags[i] : null);
             }
@@ -1525,6 +1600,7 @@ public class KoperPhys {
             if (kept.isEmpty()) return -1L;
             states = kept;
             offsets = java.util.Arrays.copyOf(keptOffsets, kept.size() * 3);
+            locals = keptLocals == null ? null : java.util.Arrays.copyOf(keptLocals, kept.size() * 3);
             blockEntityTags = tags.toArray(new net.minecraft.nbt.CompoundTag[0]);
         }
         long worldHandle = getWorldHandle(level);
@@ -1548,6 +1624,12 @@ public class KoperPhys {
             Math.round(cx) - 8, Math.round(cy) - 8, Math.round(cz) - 8,
             Math.round(cx) + 8, Math.round(cy) + 8, Math.round(cz) + 8);
 
+        KontraEntry data;
+        try { data = new KontraEntry(levelKey(level), worldHandle, states, offsets, locals); }
+        catch (IllegalArgumentException invalid) {
+            com.koper.koper_lib.coremod.KoperCore.LOGGER.warn("[KoperPhys] spawnBody refused: {}", invalid.getMessage());
+            return -1L;
+        }
         long id = KoperPhysBridge.spawnKontraktionOffsets(worldHandle, offsets, masses, lightCount, cx, cy, cz);
         if (id <= 0) {
             // whoever asked gets nothing and usually cannot say why. say it here instead of
@@ -1560,7 +1642,6 @@ public class KoperPhys {
         }
         KoperPhysBridge.setTransform(worldHandle, id, cx, cy, cz, rot[0], rot[1], rot[2], rot[3]);
 
-        KontraEntry data = new KontraEntry(levelKey(level), worldHandle, states, offsets);
         KONTRAS.put(id, data);
         indexLogicalEntry(id, data);
         CACHED_POS.put(id, new float[]{cx, cy, cz});
@@ -1570,9 +1651,9 @@ public class KoperPhys {
                 net.minecraft.nbt.CompoundTag tag = blockEntityTags[i];
                 if (tag == null) continue;
                 BlockPos local = new BlockPos(
-                    Math.round(offsets[i * 3]),
-                    Math.round(offsets[i * 3 + 1]),
-                    Math.round(offsets[i * 3 + 2]));
+                    locals == null ? Math.round(offsets[i * 3]) : locals[i * 3],
+                    locals == null ? Math.round(offsets[i * 3 + 1]) : locals[i * 3 + 1],
+                    locals == null ? Math.round(offsets[i * 3 + 2]) : locals[i * 3 + 2]);
                 try {
                     net.minecraft.nbt.CompoundTag movedTag = tag.copy();
                     net.minecraft.nbt.CompoundTag localPayload =
@@ -1618,6 +1699,8 @@ public class KoperPhys {
         }
     }
     private static final Map<Long, JointSpec> JOINT_SPECS = new ConcurrentHashMap<>();
+    // last blade hand the engine accepted per revolute joint. absent = +1
+    private static final Map<Long, Float> JOINT_BLADE_HANDS = new ConcurrentHashMap<>();
     // A joint whose two anchors have drifted this far apart is not holding anything any more. Normal
     // solver error on a settled bearing is under 0.005 blocks, so this only trips on real breakage.
     private static final float JOINT_STRETCH_WARN = 0.25f;
@@ -1706,6 +1789,25 @@ public class KoperPhys {
                 prismatic, 0f, 0f, Float.NaN, Float.NaN));
         }
         return jid;
+    }
+
+    /** Selects normal (+1) or mirrored (-1) blade pitch without changing motor direction. */
+    public static boolean setJointBladeHandedness(long jointId, float hand) {
+        if (hand != 1f && hand != -1f) return false;
+        Long world = JOINT_WORLDS.get(jointId);
+        JointSpec joint = JOINT_SPECS.get(jointId);
+        if (world == null || joint == null || joint.prismatic()) return false;
+        // same hand again is a no-op. sending it every drive tick queued a command and woke the joint
+        Float current = JOINT_BLADE_HANDS.get(jointId);
+        if (current != null && current == hand) return true;
+        if (!KoperPhysBridge.jointSetBladeHandedness(world, jointId, hand)) return false;
+        JOINT_BLADE_HANDS.put(jointId, hand);
+        return true;
+    }
+
+    /** +1 normal, -1 mirrored. A joint nobody set reads +1, the native default. */
+    public static float jointBladeHand(long jointId) {
+        return JOINT_BLADE_HANDS.getOrDefault(jointId, 1f);
     }
 
     // revolute: rad/s + max torque. prismatic: blocks/s + max force. vel 0 + big torque = handbrake
@@ -1808,6 +1910,7 @@ public class KoperPhys {
         JOINT_ENDS.remove(jointId);
         JOINT_SPECS.remove(jointId);
         JOINT_POSITION_MOTORS.remove(jointId);
+        JOINT_BLADE_HANDS.remove(jointId);
         if (wh != null) KoperPhysBridge.destroyJoint(wh, jointId);
     }
 
@@ -1869,6 +1972,7 @@ public class KoperPhys {
             JOINT_WORLDS.remove(en.getKey());
             JOINT_SPECS.remove(en.getKey());
             JOINT_POSITION_MOTORS.remove(en.getKey());
+            JOINT_BLADE_HANDS.remove(en.getKey());
             return true;
         });
     }
@@ -1909,6 +2013,21 @@ public class KoperPhys {
         return true;
     }
 
+    /** the default for bodies in this dimension: its JSON aero_mode, else the global config */
+    public static AeroMode defaultAeroMode(String levelKey) {
+        String dimension = levelKey == null ? null : levelKey.substring(levelKey.indexOf('/') + 1);
+        AeroMode own = dimension == null ? null : com.koper.koper_lib.physics.dim.KhysDimensions.getFor(dimension).aeroMode();
+        return own != null ? own : defaultAeroMode();
+    }
+
+    // after a pack reload: every body without its own override follows its dimension's default again
+    public static void refreshDefaultAeroModes() {
+        for (var entry : KONTRAS.entrySet()) {
+            if (entry.getValue().aeroOverride() != null) continue;
+            KoperPhysBridge.setAeroMode(entry.getValue().worldHandle(), entry.getKey(), entry.getValue().aeroMode().id());
+        }
+    }
+
     public static AeroMode defaultAeroMode() {
         AeroMode mode = AeroMode.parse(KhysicsConfig.get().defaultAeroMode);
         return mode != null ? mode : AeroMode.CORRECT;
@@ -1921,7 +2040,8 @@ public class KoperPhys {
         int moved = 0;
         for (var entry : KONTRAS.entrySet()) {
             if (entry.getValue().aeroOverride() != null) continue;
-            KoperPhysBridge.setAeroMode(entry.getValue().worldHandle(), entry.getKey(), mode.id());
+            // a dimension with its own aero_mode keeps it
+            KoperPhysBridge.setAeroMode(entry.getValue().worldHandle(), entry.getKey(), entry.getValue().aeroMode().id());
             moved++;
         }
         return moved;
@@ -2363,15 +2483,14 @@ public class KoperPhys {
                 state.getBlock().playerDestroy(level, player, gridPos, state,
                     minedBlockEntity, minedWith));
         }
-        // Rust keys colliders by jround(COM offset), NOT grid locals — passing locals here removed the
-        // collider of whatever block sits a centroid-shift away (usually the one BELOW) or missed
-        // entirely leaving a ghost. THE "mine a BE, floor under it stops colliding" bug.
+        // Native colliders use physical offsets; logical cells can differ and flush parts can share
+        // a rounded offset. Remove the exact collider so mining a wheel cannot take its rotor.
         float[] minedOff = data.blockOffsets.remove(local);
         data.invalidateSolidCells();
         data.invalidateLogicCells();
         if (minedOff != null)
-            KoperPhysBridge.removeBlockAtOffset(data.worldHandle(), kontraId,
-                Math.round(minedOff[0]), Math.round(minedOff[1]), Math.round(minedOff[2]));
+            KoperPhysBridge.removeBlockAtExactOffset(data.worldHandle(), kontraId,
+                minedOff[0], minedOff[1], minedOff[2]);
         KoperPhysicsEvents.fireBlockBreak(kontraId, local, state);
         // levelEvent 2001 = break particles + sound on the client
         level.levelEvent(2001, worldPos, Block.getId(state));
@@ -2391,8 +2510,8 @@ public class KoperPhys {
                 data.invalidateSolidCells();
                 data.invalidateLogicCells();
                 if (partnerOff != null)
-                    KoperPhysBridge.removeBlockAtOffset(data.worldHandle(), kontraId,
-                        Math.round(partnerOff[0]), Math.round(partnerOff[1]), Math.round(partnerOff[2]));
+                    KoperPhysBridge.removeBlockAtExactOffset(data.worldHandle(), kontraId,
+                        partnerOff[0], partnerOff[1], partnerOff[2]);
                 KoperPhysicsEvents.fireBlockBreak(kontraId, partner, ps);
             }
         }
@@ -2932,9 +3051,17 @@ public class KoperPhys {
     public static void localDataChanged(ServerLevel level, long kontraId, BlockPos local) {
         KontraEntry data = KONTRAS.get(kontraId);
         if (data == null || !data.blocks.containsKey(local)) return;
+        var physics = com.koper.koper_lib.api.local.KoperLocalData.physics(
+            data.blocks.get(local), data.localData.get(local), KhysWeightBook.get(data.blocks.get(local)).mass());
+        float[] offset = data.blockOffsets.get(local);
+        if (physics != null && offset != null)
+            KoperPhysBridge.setBlockMass(data.worldHandle(), kontraId,
+                offset[0], offset[1], offset[2], physics.mass());
         pushMaterials(kontraId, data);
         // a micro plate that grew or lost a piece faces the air differently now
-        if (KhysWeightBook.get(data.blocks.get(local)).aero()) pushAero(kontraId, data);
+        if (KhysWeightBook.get(data.blocks.get(local)).aero()
+                || com.koper.koper_lib.api.local.KoperLocalData.aeroPieces(
+                        data.blocks.get(local), data.localData.get(local)) != null) pushAero(kontraId, data);
         var render = data.renderArrays();
         float[] pos = CACHED_POS.get(kontraId);
         float[] rot = CACHED_ROT.get(kontraId);
@@ -3689,6 +3816,7 @@ public class KoperPhys {
         JOINT_ENDS.clear();
         JOINT_SPECS.clear();
         JOINT_POSITION_MOTORS.clear();
+        JOINT_BLADE_HANDS.clear();
     }
 
     // ── wand selections ───────────────────────────────────────────────────────

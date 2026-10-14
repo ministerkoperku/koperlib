@@ -184,6 +184,27 @@ public final class FullpackAddons {
         if (current != null) current.restore(server, id);
     }
 
+    /** whole joint assemblies in a level, one entry per root body; empty without a physics provider */
+    public static List<Physics.Assembly> physicsAssemblies(ServerLevel level) {
+        Physics current;
+        synchronized (FullpackAddons.class) { current = physics; }
+        return current == null ? List.of() : current.assemblies(level);
+    }
+
+    /** true when the entity rides or stands on a physics body and moves with it */
+    public static boolean physicsCarries(Entity entity) {
+        Physics current;
+        synchronized (FullpackAddons.class) { current = physics; }
+        return current != null && current.carries(entity);
+    }
+
+    /** moves an assembly with everyone aboard; the new root id, or 0 when it did not happen this tick */
+    public static long physicsTransfer(long root, ServerLevel target, net.minecraft.world.phys.Vec3 where) {
+        Physics current;
+        synchronized (FullpackAddons.class) { current = physics; }
+        return current == null ? 0L : current.transfer(root, target, where);
+    }
+
     public static List<String> entityBones(Entity entity) {
         Geo current;
         synchronized (FullpackAddons.class) { current = geo; }
@@ -321,6 +342,11 @@ public final class FullpackAddons {
         void selfRight(long id);
         void destroy(MinecraftServer server, long id);
         void restore(MinecraftServer server, long id);
+
+        record Assembly(long root, net.minecraft.world.phys.Vec3 pos, net.minecraft.world.phys.Vec3 velocity) {}
+        default List<Assembly> assemblies(ServerLevel level) { return List.of(); }
+        default boolean carries(Entity entity) { return false; }
+        default long transfer(long root, ServerLevel target, net.minecraft.world.phys.Vec3 where) { return 0L; }
     }
 
     public interface Geo {

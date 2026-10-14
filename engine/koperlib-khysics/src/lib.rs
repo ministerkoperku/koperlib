@@ -617,6 +617,12 @@ pub extern "C" fn koper_khysics_create_prismatic_joint(
     id
 }
 
+/// Select a fixed blade hand independently of the motor's direction. Only +1 and -1 are accepted.
+#[no_mangle]
+pub extern "C" fn koper_khysics_joint_set_blade_handedness(world_id: i64, joint_id: i64, hand: f32) {
+    push_cmd(world_id, PhysicsCmd::JointSetBladeHandedness { joint_id, hand });
+}
+
 // revolute: target_vel rad/s, max torque. prismatic: blocks/s, max force. vel 0 + big force = brake
 #[no_mangle]
 pub extern "C" fn koper_khysics_joint_set_motor(
@@ -727,6 +733,7 @@ pub extern "C" fn koper_khysics_set_aero(
                     area:   *p.add(6),
                     cd:     *p.add(7),
                     cl:     *p.add(8),
+                    propeller: *p.add(8),
                     buoy:   *p.add(9),
                 }
             }).collect()
@@ -735,12 +742,54 @@ pub extern "C" fn koper_khysics_set_aero(
     push_cmd(world_id, PhysicsCmd::SetAero { id: kontra_id, surfaces });
 }
 
+// Geometry format: legacy ten fields, propeller coefficient, then full XYZ dimensions.
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_aero_geometry(
+    world_id: i64, kontra_id: i64, data: *const f32, count: i32,
+) {
+    let mut pieces = Vec::new();
+    if !data.is_null() && count > 0 {
+        unsafe { for i in 0..count as usize {
+            let p = data.add(i*14);
+            pieces.push(world::aero_geometry::AeroPiece {
+                surface: world::AeroSurface {
+                    off: glam::Vec3::new(*p,*p.add(1),*p.add(2)),
+                    normal: glam::Vec3::new(*p.add(3),*p.add(4),*p.add(5)),
+                    area: *p.add(6), cd: *p.add(7), cl: *p.add(8), buoy: *p.add(9),
+                    propeller: *p.add(10), chunky: false,
+                },
+                size: glam::Vec3::new(*p.add(11),*p.add(12),*p.add(13)),
+            });
+        }}
+    }
+    push_cmd(world_id, PhysicsCmd::SetAero { id: kontra_id,
+        surfaces: world::aero_geometry::panels(pieces) });
+}
+
 #[no_mangle]
 pub extern "C" fn koper_khysics_set_aero_mode(world_id: i64, kontra_id: i64, mode: i32) {
     push_cmd(world_id, PhysicsCmd::SetAeroMode { id: kontra_id, mode: world::AeroMode::from_i32(mode) });
 }
 
 // global air velocity for the whole world — relative wind = body velocity minus this
+/// Per body wind (weather, biome, gusts). Non-finite components return the body to the world wind.
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_body_wind(world_id: i64, kontra_id: i64, wx: f32, wy: f32, wz: f32) {
+    push_cmd(world_id, PhysicsCmd::SetBodyWind { id: kontra_id, v: [wx, wy, wz] });
+}
+
+/// Share of a propeller's drag torque that reaches its airframe (0..1, 1 = all of it).
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_prop_reaction(world_id: i64, share: f32) {
+    push_cmd(world_id, PhysicsCmd::SetPropReaction(share));
+}
+
+/// The dimension's air: density multiplier, sea level, scale height and lowest density factor.
+#[no_mangle]
+pub extern "C" fn koper_khysics_set_air(world_id: i64, density: f32, sea_level: f32, scale_height: f32, min_density: f32) {
+    push_cmd(world_id, PhysicsCmd::SetAir { density, sea_level, scale_height, min_density });
+}
+
 #[no_mangle]
 pub extern "C" fn koper_khysics_set_wind(world_id: i64, wx: f32, wy: f32, wz: f32) {
     push_cmd(world_id, PhysicsCmd::SetWind { v: [wx, wy, wz] });
@@ -766,6 +815,15 @@ pub extern "C" fn koper_khysics_remove_block_at_offset(
     world_id: i64, kontra_id: i64, lx: i32, ly: i32, lz: i32,
 ) -> i32 {
     push_cmd(world_id, PhysicsCmd::RemoveBlock { id: kontra_id, local: [lx, ly, lz] });
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn koper_khysics_remove_block_at_exact_offset(
+    world_id: i64, kontra_id: i64, ox: f32, oy: f32, oz: f32,
+) -> i32 {
+    if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() { return -1; }
+    push_cmd(world_id, PhysicsCmd::RemoveBlockExact { id: kontra_id, offset: [ox, oy, oz] });
     0
 }
 

@@ -21,10 +21,19 @@ public final class KhysicsConfig {
     public String createRender = "auto";
     public boolean kontraFancyLight = true;
     public int kontraLightSpillRange = 7;
+    // most liquid cells one kontra holds. flowing water spreads over the hull like in the world and
+    // stops here, so one bucket cannot turn a big ship into a water bomb. 0 = sources only, no flow
+    public int kontraFluidCellLimit = 256;
     // which physics engine khysics runs on: rapier (everything) or elpe (cheap, for big servers)
     public String physicsBackend = "rapier";
     // aero mode for every kontra that has not been given its own (low / correct / extreme)
     public String defaultAeroMode = "correct";
+    // share of a propeller's drag torque that turns its airframe (0..1). game props spin several times
+    // slower than real ones for the same power, so the full reaction rolled planes far harder than any
+    // real aircraft; 0.25 is about the real ratio of engine torque to aileron authority. 1 = all of it
+    public float propellerReaction = 0.25f;
+    // weather wind from the dimension files (khysics/dimensions/*.json). false = still air everywhere
+    public boolean wind = true;
 
     public static KhysicsConfig get() {
         if (instance == null) load();

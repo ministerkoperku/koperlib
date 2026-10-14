@@ -262,6 +262,15 @@ public final class RapierKoperer implements PhysKoperer {
 
     // sections physics wants but never got — [sx,sy,sz] triples. returns triple count
     @Override
+    public int removeBlockAtExactOffset(long worldId, long kontraId, float ox, float oy, float oz) {
+        var h = fn("koper_khysics_remove_block_at_exact_offset",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+        if (h == null || worldId == 0) return -1;
+        try { return (int) h.invoke(worldId, kontraId, ox, oy, oz); }
+        catch (Throwable e) { err("remove_block_at_exact_offset", e); return -1; }
+    }
+
+    @Override
     public int wantedSections(long worldId, int[] outBuf, int maxSections) {
         var h = fn("koper_khysics_wanted_sections", INT_LONG_PTR_INT);
         if (h == null || worldId == 0) return 0;
@@ -363,6 +372,18 @@ public final class RapierKoperer implements PhysKoperer {
     }
 
     @Override
+    public void setAeroGeometry(long worldId, long kontraId, float[] pieces) {
+        var h = fn("koper_khysics_set_aero_geometry",
+            FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_INT));
+        if (h == null || worldId == 0) return;
+        int count = pieces.length / 14;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment seg = count > 0 ? a.allocateFrom(JAVA_FLOAT, pieces) : MemorySegment.NULL;
+            h.invoke(worldId, kontraId, seg, count);
+        } catch (Throwable e) { err("set_aero_geometry", e); }
+    }
+
+    @Override
     public void setAeroMode(long worldId, long kontraId, int mode) {
         var h = fn("koper_khysics_set_aero_mode",
             FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_LONG, JAVA_INT));
@@ -410,6 +431,32 @@ public final class RapierKoperer implements PhysKoperer {
         catch (Throwable e) { err("set_wind", e); }
     }
 
+    @Override
+    public boolean setBodyWind(long worldId, long kontraId, float wx, float wy, float wz) {
+        var h = fn("koper_khysics_set_body_wind",
+            FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_LONG, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+        if (h == null || worldId == 0) return false;
+        try { h.invoke(worldId, kontraId, wx, wy, wz); return true; }
+        catch (Throwable e) { err("set_body_wind", e); return false; }
+    }
+
+    @Override
+    public boolean setPropReaction(long worldId, float share) {
+        var h = fn("koper_khysics_set_prop_reaction", FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_FLOAT));
+        if (h == null || worldId == 0) return false;
+        try { h.invoke(worldId, share); return true; }
+        catch (Throwable e) { err("set_prop_reaction", e); return false; }
+    }
+
+    @Override
+    public boolean setAir(long worldId, float density, float seaLevel, float scaleHeight, float minDensity) {
+        var h = fn("koper_khysics_set_air",
+            FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+        if (h == null || worldId == 0) return false;
+        try { h.invoke(worldId, density, seaLevel, scaleHeight, minDensity); return true; }
+        catch (Throwable e) { err("set_air", e); return false; }
+    }
+
     // ── joints — bearing = revolute + motor, piston = prismatic + motor ──────
 
     private static final FunctionDescriptor JOINT_CREATE_DESC = FunctionDescriptor.of(JAVA_LONG,
@@ -440,6 +487,17 @@ public final class RapierKoperer implements PhysKoperer {
         if (h == null || worldId == 0) return -1L;
         try { return (long) h.invoke(worldId, kontraA, kontraB, ax, ay, az, bx, by, bz, axisX, axisY, axisZ); }
         catch (Throwable e) { err("create_prismatic_joint", e); return -1L; }
+    }
+
+    // revolute: rad/s + max torque. prismatic: blocks/s + max force. vel 0 + big force = brake
+    @Override
+    public boolean jointSetBladeHandedness(long worldId, long jointId, float hand) {
+        if (worldId == 0 || (hand != 1f && hand != -1f)) return false;
+        var h = fn("koper_khysics_joint_set_blade_handedness",
+            FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_LONG, JAVA_FLOAT));
+        if (h == null) return false;
+        try { h.invoke(worldId, jointId, hand); return true; }
+        catch (Throwable e) { err("joint_set_blade_handedness", e); return false; }
     }
 
     // revolute: rad/s + max torque. prismatic: blocks/s + max force. vel 0 + big force = brake

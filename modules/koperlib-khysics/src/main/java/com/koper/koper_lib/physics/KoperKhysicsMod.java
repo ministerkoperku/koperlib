@@ -42,6 +42,7 @@ public final class KoperKhysicsMod implements ModInitializer {
 
         ServerTickEvents.START_SERVER_TICK.register(server -> KoperPhys.tickPlayerKontraInteractions(server));
         ServerTickEvents.END_SERVER_TICK.register(KoperPhys::tickAll);
+        ServerTickEvents.END_SERVER_TICK.register(KontraStanders::tick);
         ServerTickEvents.END_SERVER_TICK.register(com.koper.koper_lib.network.KontraMotionServer::tick);
         ServerTickEvents.END_SERVER_TICK.register(KontraTransfer::recover);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> com.koper.koper_lib.network.KontraMotionServer.clear());
@@ -67,6 +68,7 @@ public final class KoperKhysicsMod implements ModInitializer {
 
         Map<UUID, String> playerDimensions = new ConcurrentHashMap<>();
         ServerTickEvents.END_SERVER_TICK.register(server -> {
+            com.koper.koper_lib.physics.dim.KhysicsWind.tick(server);
             if (server.getTickCount() % 6000 == 0 && !KoperPhys.all().isEmpty())
                 KontraWorldData.save(server);
             for (ServerPlayer player : server.getPlayerList().getPlayers()) {

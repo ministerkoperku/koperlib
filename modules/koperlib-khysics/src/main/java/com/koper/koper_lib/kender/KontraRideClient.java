@@ -229,6 +229,58 @@ public final class KontraRideClient {
         return com.koper.koper_lib.physics.KontraFrame.finite(off) ? off : Vec3.ZERO;
     }
 
+    // entity id -> {deck id, local x, y, z, received nanos}, from the server's KontraStanders
+    private static final it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<double[]> STANDERS =
+        new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>();
+    private static final long STANDER_STALE_NANOS = 250_000_000L;
+
+    public static void standers(com.koper.koper_lib.network.KontraStandersPayload payload) {
+        long now = System.nanoTime();
+        // entities that left or died stop being sent; drop them once they are long stale
+        if (STANDERS.size() > 256)
+            STANDERS.values().removeIf(slot -> now - (long) slot[4] > 5_000_000_000L);
+        int[] ids = payload.entities();
+        float[] l = payload.locals();
+        for (int i = 0; i < ids.length; i++) {
+            double[] slot = STANDERS.get(ids[i]);
+            if (slot == null || slot[0] != payload.body()) {
+                STANDERS.put(ids[i], new double[]{payload.body(), l[i * 3], l[i * 3 + 1], l[i * 3 + 2], now,
+                    l[i * 3], l[i * 3 + 1], l[i * 3 + 2]});
+                continue;
+            }
+            slot[1] = l[i * 3]; slot[2] = l[i * 3 + 1]; slot[3] = l[i * 3 + 2]; slot[4] = now;
+        }
+    }
+
+    // anything else standing on a moving deck: a mob, another player. vanilla draws it where its last
+    // packets put it, lerped over a few ticks, while kender draws the ship where it is this frame, so
+    // the faster the ship the further back it stood, and it walked back to its spot when the ship
+    // stopped. the server says where on the deck it stands; draw it there, on the deck kender draws
+    public static Vec3 standingDeckOffset(Entity entity, float tickDelta) {
+        Minecraft mc = Minecraft.getInstance();
+        if (entity == mc.player || entity.isPassenger() || STANDERS.isEmpty()) return Vec3.ZERO;
+        double[] s = STANDERS.get(entity.getId());
+        if (s == null) return Vec3.ZERO;
+        long now = System.nanoTime();
+        KenderClientState.KontraRenderData k = KenderClientState.getById((long) s[0]);
+        if (k == null || now - (long) s[4] > STANDER_STALE_NANOS) {
+            STANDERS.remove(entity.getId());
+            return Vec3.ZERO;
+        }
+        float[] rp = KenderClientState.renderPos(k, now), rr = KenderClientState.renderRot(k, now);
+        if (rp == null || rr == null) return Vec3.ZERO;
+        // walking on the deck still eases between the 20 Hz samples instead of stepping
+        s[5] += (s[1] - s[5]) * 0.35; s[6] += (s[2] - s[6]) * 0.35; s[7] += (s[3] - s[7]) * 0.35;
+        var rendered = new com.koper.koper_lib.physics.KontraFrame(new Vec3(rp[0], rp[1], rp[2]),
+            new org.joml.Quaterniond(rr[0], rr[1], rr[2], rr[3]), Vec3.ZERO, Vec3.ZERO, Vec3.ZERO, 0);
+        Vec3 vanilla = new Vec3(net.minecraft.util.Mth.lerp(tickDelta, entity.xo, entity.getX()),
+            net.minecraft.util.Mth.lerp(tickDelta, entity.yo, entity.getY()),
+            net.minecraft.util.Mth.lerp(tickDelta, entity.zo, entity.getZ()));
+        Vec3 off = rendered.toWorld(new Vec3(s[5], s[6], s[7])).subtract(vanilla);
+        // a teleport or a dimension change is not lag to hide
+        return com.koper.koper_lib.physics.KontraFrame.finite(off) && off.lengthSqr() < 64.0 ? off : Vec3.ZERO;
+    }
+
     public static double renderRideCameraDistance(Entity entity) {
         Minecraft mc = Minecraft.getInstance();
         if (!(entity instanceof LocalPlayer player) || player != mc.player || !isRideLocked(player))

@@ -63,7 +63,7 @@ public sealed interface ScriptCommand permits
         ScriptCommand.GuiClose,
         ScriptCommand.GuiHud {
 
-    record Teleport(String uuid, double x, double y, double z) implements ScriptCommand {}
+    record Teleport(String uuid, double x, double y, double z, String dimension) implements ScriptCommand {}
     record PlaySound(double x, double y, double z, String id, float vol, float pitch) implements ScriptCommand {}
     record Particle(String id, double x, double y, double z, int count) implements ScriptCommand {}
     record ParticleBurst(String id, double x, double y, double z, int count, double spread) implements ScriptCommand {}

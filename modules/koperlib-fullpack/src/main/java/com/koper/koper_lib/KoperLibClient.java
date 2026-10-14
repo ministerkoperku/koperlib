@@ -66,6 +66,7 @@ public class KoperLibClient implements ClientModInitializer {
             });
         });
 
+        com.koper.koper_lib.fullpack.SpaceBodiesClient.init();
         ClientPlayNetworking.registerGlobalReceiver(ReloadResourcesPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 KoperLib.LOGGER.info("[KoperLib] Server requested resource reload.");

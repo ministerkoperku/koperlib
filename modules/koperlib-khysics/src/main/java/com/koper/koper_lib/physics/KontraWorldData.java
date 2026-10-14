@@ -33,7 +33,7 @@ import java.util.List;
 public class KontraWorldData {
 
     private static final int    MAGIC    = 0x4B4B4F4E; // "KKON"
-    private static final byte   VERSION  = 10; // 10 poses are exact, no ground fit; 9 body stash; 8 joint limits; 7 block origins; 6 saved ids + joints
+    private static final byte   VERSION  = 11; // 11 blade hand; 10 poses are exact, no ground fit; 9 body stash; 8 joint limits; 7 block origins; 6 saved ids + joints
     private static final int    MAX_RECORDS = 100_000;
     private static final int    MAX_RECORD_BYTES = 32 * 1024 * 1024;
     private static final String DIR      = "kontrakcions";
@@ -131,11 +131,14 @@ public class KontraWorldData {
                 }
                 // v6 tail: live joints whose BOTH ends made it into this save — bearing vehicles
                 // wake up welded instead of falling apart at every restart
-                List<KoperPhys.JointSpec> joints = new ArrayList<>();
-                for (var js : KoperPhys.jointSpecs().values())
-                    if (savedIds.contains(js.a()) && (js.b() == 0L || savedIds.contains(js.b()))) joints.add(js);
+                List<java.util.Map.Entry<Long, KoperPhys.JointSpec>> joints = new ArrayList<>();
+                for (var saved : KoperPhys.jointSpecs().entrySet()) {
+                    var js = saved.getValue();
+                    if (savedIds.contains(js.a()) && (js.b() == 0L || savedIds.contains(js.b()))) joints.add(saved);
+                }
                 o.writeInt(joints.size());
-                for (var js : joints) {
+                for (var saved : joints) {
+                    var js = saved.getValue();
                     o.writeLong(js.a()); o.writeLong(js.b());
                     for (float f : js.anchorA()) o.writeFloat(f);
                     for (float f : js.anchorB()) o.writeFloat(f);
@@ -143,6 +146,7 @@ public class KontraWorldData {
                     o.writeBoolean(js.prismatic());
                     o.writeFloat(js.motorVel()); o.writeFloat(js.motorForce());
                     o.writeFloat(js.limitMin()); o.writeFloat(js.limitMax());
+                    o.writeFloat(KoperPhys.jointBladeHand(saved.getKey()));
                 }
             }
             Path target = dir.resolve(BIN);
@@ -231,7 +235,7 @@ public class KontraWorldData {
         int jointCount = in.readInt();
         if (jointCount < 0 || jointCount > 100_000) throw new IOException("insane joint count " + jointCount);
         record KoperSavedJoint(long a, long b, float[] aa, float[] ab, float[] ax, boolean prismatic,
-                               float motorVel, float motorForce, float limitMin, float limitMax) {}
+                               float motorVel, float motorForce, float limitMin, float limitMax, float hand) {}
         List<KoperSavedJoint> saved = new ArrayList<>();
         for (int i = 0; i < jointCount; i++) {
             long oldA = in.readLong(), oldB = in.readLong();
@@ -242,9 +246,10 @@ public class KontraWorldData {
             float motorVel = in.readFloat(), motorForce = in.readFloat();
             float limitMin = version >= 8 ? in.readFloat() : Float.NaN;
             float limitMax = version >= 8 ? in.readFloat() : Float.NaN;
+            float hand = version >= 11 ? in.readFloat() : 1f;
             Long a = remap.get(oldA), b = oldB == 0L ? 0L : remap.get(oldB);
             if (a == null || b == null) continue; // one end didn't come back — joint dies with it
-            saved.add(new KoperSavedJoint(a, b, aa, ab, ax, prismatic, motorVel, motorForce, limitMin, limitMax));
+            saved.add(new KoperSavedJoint(a, b, aa, ab, ax, prismatic, motorVel, motorForce, limitMin, limitMax, hand));
         }
         // the ground fit in spawnRestored can't tell a part that sits inside a bearing's cell on purpose
         // from a body sunk into terrain, so it lifted it ~2 blocks and every joint came back stretched.
@@ -282,6 +287,7 @@ public class KontraWorldData {
             if (Float.isFinite(j.limitMin()) && Float.isFinite(j.limitMax()))
                 KoperPhys.setJointLimits(jid, j.limitMin(), j.limitMax());
             if (j.motorForce() > 0f) KoperPhys.setJointMotor(jid, j.motorVel(), j.motorForce());
+            if (!prismatic && j.hand() == -1f) KoperPhys.setJointBladeHandedness(jid, -1f);
             revived++;
         }
         if (jointCount > 0)
@@ -416,6 +422,13 @@ public class KontraWorldData {
             origins = java.util.Arrays.copyOf(origins, kept);
         }
         long worldHandle = KoperPhys.getWorldHandle(level);
+        KontraEntry data;
+        try {
+            data = new KontraEntry(levelKey, worldHandle, states, offsets, coords);
+        } catch (IllegalArgumentException invalid) {
+            com.koper.koper_lib.coremod.KoperCore.LOGGER.warn("[KontraWorldData] invalid restored block coordinates in {}", levelKey, invalid);
+            return -1L;
+        }
 
         // prime the section cache BEFORE the spawn cmd — same queue, so the body never steps
         // without its floor (the old restore fell through the ground for a couple ticks)
@@ -476,7 +489,6 @@ public class KontraWorldData {
         // restore may carry a non-identity rotation — setTransform applies it (terrain already present)
         KoperPhysBridge.setTransform(worldHandle, kontraId, cx, cy, cz, qx, qy, qz, qw);
 
-        KontraEntry data = new KontraEntry(levelKey, worldHandle, states, offsets);
         data.setAeroMode(aeroMode);
         for (int i = 0; i < states.size(); i++) {
             BlockPos local = new BlockPos(coords[i*3], coords[i*3+1], coords[i*3+2]);

@@ -21,6 +21,7 @@ public final class FullpackNetworking {
     public static void init() {
         KoperNetwork.clientbound("fullpack", FullPackSyncPayload.TYPE, FullPackSyncPayload.CODEC);
         KoperNetwork.clientbound("fullpack", ReloadResourcesPayload.TYPE, ReloadResourcesPayload.CODEC);
+        KoperNetwork.clientbound("fullpack", com.koper.koper_lib.network.SpaceBodiesPayload.TYPE, com.koper.koper_lib.network.SpaceBodiesPayload.CODEC);
         KoperNetwork.clientbound("fullpack", KuiOpenPayload.TYPE, KuiOpenPayload.CODEC);
         KoperNetwork.clientbound("fullpack", com.koper.koper_lib.network.BedrockKameraPayload.TYPE, com.koper.koper_lib.network.BedrockKameraPayload.CODEC);
         KoperNetwork.clientbound("fullpack", KuiMenuDataPayload.TYPE, KuiMenuDataPayload.CODEC);

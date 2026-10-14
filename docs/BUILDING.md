@@ -13,7 +13,7 @@ From the repository root:
 ./gradlew build
 ```
 
-The build compiles the native workspace in release mode and bundles the available libraries. Module jars are written to `build/libs/`. For a release, run `./gradlew buildWindows` first (Rust target `x86_64-pc-windows-gnu` plus MinGW) so the Windows libraries are bundled next to the Linux ones; then `./gradlew build releaseJars` packs them into the three release jars in `build/release/` (KoperLib Core, Fullpack APIs, Khysics). The root `koper_lib` jar is a development aggregator only, and Koperstuff is a separate developer jar.
+The build compiles the native workspace in release mode and bundles the available libraries. Module jars are written to `build/libs/`. For a release, run `./gradlew buildWindows` first (Rust target `x86_64-pc-windows-gnu` plus MinGW) so the Windows libraries are bundled next to the Linux ones; then `./gradlew build releaseJars` packs them into the three release jars in `build/release/` (KoperLib Core, Fullpack APIs, Khysics). The root `koper_lib` jar is a development aggregator only, and Koperstuff is a separate developer jar. Each release jar takes its icon from `branding/icons/<jar name>.png`; `generate_icons.py` in that folder draws the placeholder art.
 
 `./gradlew runClient -PdevModules=core,specific,kender,khysics,elpe` starts the dev game with only the listed modules, to check that a release jar runs without the others.
 
@@ -72,7 +72,7 @@ Modules publish independently to Maven Local:
 ./gradlew publishToMavenLocal
 ```
 
-Use the coordinate of the module the addon actually needs, such as `com.koper.koper_lib:koperlib-fullpack:0.1.1-alpha`. See [Java addons](JAVA_ADDONS.md). Kopermod currently consumes local module jars directly; build KoperLib and Koper Mana Lib before building it.
+Use the coordinate of the module the addon actually needs, such as `com.koper.koper_lib:koperlib-fullpack:0.1.2-alpha`. See [Java addons](JAVA_ADDONS.md). Kopermod currently consumes local module jars directly; build KoperLib and Koper Mana Lib before building it.
 
 ## Verification
 

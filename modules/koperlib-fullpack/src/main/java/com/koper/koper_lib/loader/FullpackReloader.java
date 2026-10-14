@@ -28,6 +28,8 @@ public final class FullpackReloader {
                 }
                 for (var player : server.getPlayerList().getPlayers())
                     ServerPlayNetworking.send(player, new ReloadResourcesPayload());
+                com.koper.koper_lib.fullpack.DimensionEntityRules.applyAll(server);
+                com.koper.koper_lib.fullpack.SpaceBodies.afterReload(server);
                 // quests only auto-started on join, so anyone already in the world when a pack
                 // showed up sat there with nothing running and no way to tell
                 for (var player : server.getPlayerList().getPlayers())
@@ -52,6 +54,7 @@ public final class FullpackReloader {
         com.koper.koper_lib.block.KoperBrainRegistry.clear();
         com.koper.koper_lib.factory.EntityFactory.clearReloadData();
         com.koper.koper_lib.factory.DimensionFactory.clearReloadData();
+        com.koper.koper_lib.fullpack.SpaceBodies.clearPack();
         com.koper.koper_lib.kui.KuiBook.clear();
         com.koper.koper_lib.quest.QuestBook.clear();
         com.koper.koper_lib.quest.BookShelf.clear();

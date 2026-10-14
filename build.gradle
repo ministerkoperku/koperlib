@@ -241,7 +241,7 @@ tasks.named('build') {
 // consumers. Fullpack APIs and Khysics depend on Core only and must start without each other.
 def releaseSets = [
     [id: 'koperlib', name: 'KoperLib Core', file: 'koperlib-core',
-     description: 'KoperLib foundation: networking, commands, config, the Kender render backend and the attachment, multiblock, workstation and combat APIs.',
+     description: 'Core library the other KoperLib modules build on: native library loading and rendering, plus networking, commands, config and shared APIs.',
      modules: ['koperlib-core', 'koperlib-specific', 'koperlib-kender'], needsCore: false],
     [id: 'koperlib_fullpack_apis', name: 'KoperLib Fullpack APIs', file: 'koperlib-fullpack-apis',
      description: 'Fullpacks (JSON/Lua content, KUI, Koper Actions), Kodel models and animations, and KFX effects. Requires KoperLib Core.',
@@ -263,16 +263,25 @@ def releaseJars = releaseSets.collect { set ->
         dependsOn moduleJars
         moduleJars.each { jarTask -> from(jarTask) { into 'META-INF/jars' } }
         from(metaDir)
+        // placeholder art from branding/icons/generate_icons.py, replace the png to change it
+        from("branding/icons/${set.file}.png") { into "assets/${set.id}"; rename { 'icon.png' } }
         from(files('COPYING', 'COPYING.LESSER', 'THIRD_PARTY.md'))
         if (set.file == 'koperlib-khysics') from('engine/rapier3d/LICENSE') { rename { 'LICENSE-rapier.txt' } }
         inputs.property 'version', project.version
+        inputs.file "branding/icons/${set.file}.png"
         doFirst {
+            // build/release holds only the newest set; older versions of this jar go
+            delete fileTree(destinationDirectory) { include "${set.file}-*.jar" }
             def nested = moduleJars.collect { [file: "META-INF/jars/${it.get().archiveFileName.get()}"] }
             def depends = [fabricloader: ">=${project.loader_version}", minecraft: ">=${project.minecraft_version}",
                            java: '>=25', 'fabric-api': '*']
             if (set.needsCore) depends.koperlib = ">=${project.version}"
             def meta = [schemaVersion: 1, id: set.id, version: project.version, name: set.name,
                         description: set.description, authors: ['Koper'], license: 'LGPL-3.0-only',
+                        icon: "assets/${set.id}/icon.png",
+                        contact: [homepage: 'https://github.com/ministerkoperku/koperlib',
+                                  sources: 'https://github.com/ministerkoperku/koperlib',
+                                  issues: 'https://github.com/ministerkoperku/koperlib/issues'],
                         environment: '*', jars: nested, depends: depends]
             def out = metaDir.get().file('fabric.mod.json').asFile
             out.parentFile.mkdirs()
